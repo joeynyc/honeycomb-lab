@@ -12,6 +12,7 @@ Routes by model alias (config.json) or passthrough model@backend / backend/model
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import sys
@@ -59,6 +60,35 @@ _activity: dict[str, dict[str, Any]] = {
 }
 # How long after last byte a node stays "lit" (seconds)
 ACTIVE_WINDOW_SEC = 8.0
+
+# Recent request history for the /requests endpoint (thread-safe ring buffer)
+_requests_lock = threading.Lock()
+_request_log: collections.deque[dict[str, Any]] = collections.deque(maxlen=50)
+
+
+def record_request(
+    alias: str | None,
+    backend: str,
+    model: str,
+    stream: bool,
+    status: int | None,
+    duration_ms: float | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+) -> None:
+    entry = {
+        "ts": time.time(),
+        "alias": alias,
+        "backend": backend,
+        "model": model,
+        "stream": stream,
+        "status": status,
+        "duration_ms": duration_ms,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
+    with _requests_lock:
+        _request_log.append(entry)
 
 
 def log(msg: str) -> None:
@@ -407,6 +437,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(data).encode())
             return
 
+        if path == "/requests":
+            with _requests_lock:
+                entries = list(reversed(_request_log))
+            self._send(200, json.dumps({"requests": entries}).encode())
+            return
+
         self._send(404, json.dumps({"error": {"message": f"not found: {path}"}}).encode())
 
     def do_POST(self) -> None:  # noqa: N802
@@ -477,11 +513,29 @@ class Handler(BaseHTTPRequestHandler):
         )
 
         activity_begin(bid, upstream, alias or model)
+        t0 = time.perf_counter()
         try:
             if stream:
                 self._proxy_stream(target, body)
+                record_request(
+                    alias or model, bid, upstream, True,
+                    None, (time.perf_counter() - t0) * 1000, None, None,
+                )
             else:
                 status, _, resp = http_json("POST", target, body=body, timeout=300.0)
+                duration_ms = (time.perf_counter() - t0) * 1000
+                prompt_tokens = completion_tokens = None
+                try:
+                    usage = json.loads(resp.decode()).get("usage") or {}
+                    prompt_tokens = usage.get("prompt_tokens")
+                    completion_tokens = usage.get("completion_tokens")
+                except Exception:
+                    pass
+                record_request(
+                    alias or model, bid, upstream, False,
+                    status if status else 502, duration_ms,
+                    prompt_tokens, completion_tokens,
+                )
                 if status == 0:
                     self._send(502, resp)
                 else:

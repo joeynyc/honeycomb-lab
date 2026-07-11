@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var monitor: HealthMonitor
+    @AppStorage("showFeed") private var showFeed = true
 
     var body: some View {
         ZStack {
@@ -15,11 +16,18 @@ struct ContentView: View {
 
                 HStack(alignment: .top, spacing: 14) {
                     // Lattice — the map is the status display; no text strip
-                    HoneycombCanvas(
-                        nodes: monitor.nodes,
-                        selectedID: monitor.selectedNodeID,
-                        onSelect: { monitor.select($0) }
-                    )
+                    VStack(spacing: 10) {
+                        HoneycombCanvas(
+                            nodes: monitor.nodes,
+                            selectedID: monitor.selectedNodeID,
+                            onSelect: { monitor.select($0) }
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if showFeed {
+                            TrafficFeed(feed: monitor.feed)
+                        }
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     // Inspector only — full height, no chat
@@ -63,6 +71,26 @@ struct ContentView: View {
             }
 
             Spacer()
+
+            Button {
+                showFeed.toggle()
+            } label: {
+                Text("FEED")
+                    .font(LabTheme.monoTiny)
+                    .tracking(1)
+                    .foregroundStyle(showFeed ? LabTheme.phosphor : LabTheme.textMuted)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .stroke(
+                                showFeed ? LabTheme.phosphor.opacity(0.5) : LabTheme.stroke,
+                                lineWidth: 1
+                            )
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 14)
 
             VStack(alignment: .trailing, spacing: 4) {
                 Text("\(monitor.onlineCount)/\(monitor.nodes.count) NODES · " +

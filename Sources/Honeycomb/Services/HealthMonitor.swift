@@ -10,6 +10,8 @@ final class HealthMonitor {
     /// Honeycomb gateway (OpenAI front door on :4000)
     private(set) var gatewayOK: Bool = false
     private(set) var gatewayDetail: String = "gateway unknown"
+    /// Recent gateway requests, newest first (traffic feed)
+    private(set) var feed: [FeedEntry] = []
     var selectedNodeID: String?
 
     private var pollTask: Task<Void, Never>?
@@ -75,9 +77,11 @@ final class HealthMonitor {
 
         async let nodeResults: [(String, ProbeResult)] = Self.probeAll(nodes: snapshot, session: session)
         async let gw: GatewaySnapshot = Self.fetchGateway(session: session, url: gatewayURL)
+        async let recentRequests: [FeedEntry] = Self.fetchFeed(session: session)
 
         let results = await nodeResults
         let gateway = await gw
+        feed = await recentRequests
 
         gatewayOK = gateway.ok
         gatewayDetail = gateway.detail
@@ -121,6 +125,48 @@ final class HealthMonitor {
         var ok: Bool
         var detail: String
         var nodeActivity: [String: Bool]
+    }
+
+    /// One row of the gateway's /requests ring buffer.
+    struct FeedEntry: Identifiable, Equatable, Sendable {
+        var id: Double { ts }
+        var ts: Double
+        var alias: String?
+        var backend: String
+        var model: String
+        var stream: Bool
+        var status: Int?
+        var durationMs: Double?
+        var completionTokens: Int?
+
+        var date: Date { Date(timeIntervalSince1970: ts) }
+    }
+
+    private nonisolated static func fetchFeed(session: URLSession) async -> [FeedEntry] {
+        guard let url = URL(string: "http://127.0.0.1:4000/requests") else { return [] }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 3
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = obj["requests"] as? [[String: Any]]
+        else { return [] }
+        return items.compactMap { item in
+            guard let ts = item["ts"] as? Double,
+                  let backend = item["backend"] as? String,
+                  let model = item["model"] as? String
+            else { return nil }
+            return FeedEntry(
+                ts: ts,
+                alias: item["alias"] as? String,
+                backend: backend,
+                model: model,
+                stream: item["stream"] as? Bool ?? false,
+                status: item["status"] as? Int,
+                durationMs: item["duration_ms"] as? Double,
+                completionTokens: item["completion_tokens"] as? Int
+            )
+        }
     }
 
     private nonisolated static func probeAll(nodes: [LabNode], session: URLSession) async -> [(String, ProbeResult)] {
