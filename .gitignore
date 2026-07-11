@@ -1,5 +1,6 @@
 .build/
 Honeycomb.app/
+gateway/stats.json
 .DS_Store
 *.log
 __pycache__/

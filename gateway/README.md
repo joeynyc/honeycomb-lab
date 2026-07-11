@@ -20,6 +20,7 @@ Gateway runs automatically under launchd:
 | Model id | Routes to |
 |----------|-----------|
 | `cheap` | Cheapest healthy backend with a chat model loaded — `cheap_order` in config: lms → gx10 → joeydgx. Prefers the small model on the Mini over waking a Spark. |
+| `any` | Like `cheap`, plus automatic failover: if the backend errors mid-request, retries the next healthy one (non-stream only). Any alias can opt in with `"failover": true` in the request body. |
 | `spark-peer` | gx10 vLLM (default) |
 | `spark-main` | JoeyDGX vLLM (when serving) |
 | `pc-4080` / `local-lms` | LM Studio on Mini (includes LM Link remote models) |

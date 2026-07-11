@@ -80,6 +80,19 @@ curl -s http://127.0.0.1:4000/v1/chat/completions \
 | Mac mini | Hub | This machine | LM Studio `:1234` |
 | PC 4080 | Desktop GPU | LM Link peer ZeroCool | Load model on PC |
 
+## Map features
+
+- **Metrics** (Spark nodes): GPU %, unified memory, vLLM KV-cache, active
+  requests, tok/s — inspector bars go amber above 85%.
+- **TRAFFIC feed**: last gateway requests (alias, model, tokens, duration)
+  under the map; FEED toggle in the top bar.
+- **History**: hour of health+latency per node (TREND sparkline, CHANGED row),
+  persisted to `~/Library/Application Support/Honeycomb/history.json`.
+  macOS notification when a node goes offline / comes back.
+- **SERVE / STOP** (Spark nodes): start/stop the node's inference Docker
+  container over SSH, with confirmation. Container names in
+  `~/Library/Application Support/Honeycomb/control.json`.
+
 ## PING diagnostic
 
 Select a hex → **PING** in the inspector. Fires one tiny prompt through the

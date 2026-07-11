@@ -65,6 +65,78 @@ ACTIVE_WINDOW_SEC = 8.0
 _requests_lock = threading.Lock()
 _request_log: collections.deque[dict[str, Any]] = collections.deque(maxlen=50)
 
+# Per-alias cumulative stats, persisted to stats.json (thread-safe)
+STATS_PATH = ROOT / "stats.json"
+STATS_WRITE_INTERVAL_SEC = 30.0
+_stats_lock = threading.Lock()
+_stats: dict[str, dict[str, Any]] = {}
+_stats_last_write = 0.0
+
+
+def _load_stats() -> None:
+    global _stats
+    try:
+        with STATS_PATH.open() as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _stats = data
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log(f"stats load failed: {e}")
+
+
+def _save_stats_if_due() -> None:
+    global _stats_last_write
+    now = time.time()
+    with _stats_lock:
+        if now - _stats_last_write < STATS_WRITE_INTERVAL_SEC:
+            return
+        _stats_last_write = now
+        snapshot = json.dumps(_stats, indent=2)
+    tmp = STATS_PATH.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(snapshot)
+        os.replace(tmp, STATS_PATH)
+    except Exception as e:
+        log(f"stats save failed: {e}")
+
+
+def stats_snapshot() -> dict[str, Any]:
+    with _stats_lock:
+        return {k: dict(v) for k, v in _stats.items()}
+
+
+def _update_stats(
+    key: str,
+    status: int | None,
+    duration_ms: float | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+) -> None:
+    is_error = status is None or status == 0 or status >= 400
+    with _stats_lock:
+        s = _stats.setdefault(
+            key,
+            {
+                "requests": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_duration_ms": 0.0,
+                "errors": 0,
+            },
+        )
+        s["requests"] += 1
+        if prompt_tokens:
+            s["prompt_tokens"] += prompt_tokens
+        if completion_tokens:
+            s["completion_tokens"] += completion_tokens
+        if duration_ms:
+            s["total_duration_ms"] += duration_ms
+        if is_error:
+            s["errors"] += 1
+    _save_stats_if_due()
+
 
 def record_request(
     alias: str | None,
@@ -89,6 +161,7 @@ def record_request(
     }
     with _requests_lock:
         _request_log.append(entry)
+    _update_stats(alias or model, status, duration_ms, prompt_tokens, completion_tokens)
 
 
 def log(msg: str) -> None:
@@ -246,9 +319,10 @@ def resolve_model(model: str | None) -> tuple[str, str, str | None]:
     """Return (backend_id, upstream_model_or_empty, alias_used)."""
     # Cost-aware routing: prefer the cheapest available model, fall back to
     # the normal default when nothing cheap is up.
-    if model in ("cheap", "auto-cheap"):
+    if model in ("cheap", "auto-cheap", "any"):
         if resolved := resolve_cheap():
-            return resolved
+            bid, up, _ = resolved
+            return bid, up, "any" if model == "any" else "cheap"
         model = DEFAULT_MODEL
 
     if not model or model in ("default", "auto"):
@@ -303,6 +377,22 @@ def merge_models() -> list[dict[str, Any]]:
     )
     seen.add("cheap")
 
+    # Dynamic failover alias — same resolution as "cheap", but do_POST
+    # retries remaining CHEAP_ORDER backends on upstream failure.
+    any_resolved = resolve_cheap()
+    out.append(
+        {
+            "id": "any",
+            "object": "model",
+            "owned_by": "honeycomb/dynamic",
+            "backend": any_resolved[0] if any_resolved else None,
+            "resolves_to": any_resolved[1] if any_resolved else None,
+            "healthy": any_resolved is not None,
+            "order": CHEAP_ORDER,
+        }
+    )
+    seen.add("any")
+
     # Stable aliases first
     for alias, spec in ALIASES.items():
         if alias == "default":
@@ -343,6 +433,47 @@ def merge_models() -> list[dict[str, Any]]:
             seen.add(full)
 
     return out
+
+
+def _proxy_attempt(
+    bid: str,
+    upstream: str,
+    alias: str | None,
+    suffix: str,
+    payload: dict[str, Any],
+    requested_model: str,
+) -> tuple[int, bytes]:
+    """One non-stream proxy attempt to a specific backend. Records activity + stats."""
+    be = BACKENDS[bid]
+    base = be["base_url"].rstrip("/")
+    body_payload = dict(payload)
+    body_payload["model"] = upstream
+    body = json.dumps(body_payload).encode()
+    target = base + suffix
+
+    log(
+        f"route model={requested_model!r} alias={alias!r} → {bid} upstream={upstream!r} stream=False"
+    )
+    activity_begin(bid, upstream, alias or requested_model)
+    t0 = time.perf_counter()
+    try:
+        status, _, resp = http_json("POST", target, body=body, timeout=300.0)
+    finally:
+        activity_end(bid)
+    duration_ms = (time.perf_counter() - t0) * 1000
+    prompt_tokens = completion_tokens = None
+    try:
+        usage = json.loads(resp.decode()).get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+    except Exception:
+        pass
+    record_request(
+        alias or requested_model, bid, upstream, False,
+        status if status else 502, duration_ms,
+        prompt_tokens, completion_tokens,
+    )
+    return status, resp
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -428,6 +559,7 @@ class Handler(BaseHTTPRequestHandler):
                         else None
                     ),
                 },
+                "stats": stats_snapshot(),
             }
             self._send(200, json.dumps(payload, indent=2).encode())
             return
@@ -462,6 +594,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"error": {"message": "invalid json"}}).encode())
             return
 
+        # "failover": true opts a non-stream request into backend retry on
+        # upstream failure; pop it so it never reaches the upstream API.
+        failover_requested = bool(payload.pop("failover", False))
+
         model = payload.get("model") or DEFAULT_MODEL
         bid, upstream, alias = resolve_model(model)
         if bid not in BACKENDS:
@@ -475,22 +611,28 @@ class Handler(BaseHTTPRequestHandler):
         base = be["base_url"].rstrip("/")
 
         # If alias has no fixed upstream, pick first healthy model on backend
+        backend_unhealthy = False
         if not upstream:
             ok, models, _ = backend_status(bid)
             if not ok:
-                self._send(
-                    502,
-                    json.dumps(
-                        {
-                            "error": {
-                                "message": f"backend {bid} unhealthy ({be.get('name')})",
-                                "type": "backend_down",
-                                "backend": bid,
+                # With failover enabled, fall through so the retry loop can
+                # pick a healthy backend instead of failing here.
+                if not (failover_requested or model == "any") or bool(payload.get("stream")):
+                    self._send(
+                        502,
+                        json.dumps(
+                            {
+                                "error": {
+                                    "message": f"backend {bid} unhealthy ({be.get('name')})",
+                                    "type": "backend_down",
+                                    "backend": bid,
+                                }
                             }
-                        }
-                    ).encode(),
-                )
-                return
+                        ).encode(),
+                    )
+                    return
+                backend_unhealthy = True
+                models = []
             # Prefer a chat-capable model: embedding models can't serve
             # /chat/completions but may sort first in the backend's list.
             chat_models = [m for m in models if "embed" not in m.lower()]
@@ -501,47 +643,56 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 upstream = model if model not in ALIASES else "default"
 
-        payload["model"] = upstream
         stream = bool(payload.get("stream"))
-        body = json.dumps(payload).encode()
         # path is /v1/... — append to base that already ends with /v1
         suffix = path[len("/v1") :]  # /chat/completions
-        target = base + suffix
 
-        log(
-            f"route model={model!r} alias={alias!r} → {bid} upstream={upstream!r} stream={stream}"
-        )
-
-        activity_begin(bid, upstream, alias or model)
-        t0 = time.perf_counter()
-        try:
-            if stream:
+        if stream:
+            payload["model"] = upstream
+            body = json.dumps(payload).encode()
+            target = base + suffix
+            log(
+                f"route model={model!r} alias={alias!r} → {bid} upstream={upstream!r} stream=True"
+            )
+            activity_begin(bid, upstream, alias or model)
+            t0 = time.perf_counter()
+            try:
                 self._proxy_stream(target, body)
                 record_request(
                     alias or model, bid, upstream, True,
                     None, (time.perf_counter() - t0) * 1000, None, None,
                 )
-            else:
-                status, _, resp = http_json("POST", target, body=body, timeout=300.0)
-                duration_ms = (time.perf_counter() - t0) * 1000
-                prompt_tokens = completion_tokens = None
-                try:
-                    usage = json.loads(resp.decode()).get("usage") or {}
-                    prompt_tokens = usage.get("prompt_tokens")
-                    completion_tokens = usage.get("completion_tokens")
-                except Exception:
-                    pass
-                record_request(
-                    alias or model, bid, upstream, False,
-                    status if status else 502, duration_ms,
-                    prompt_tokens, completion_tokens,
-                )
-                if status == 0:
-                    self._send(502, resp)
-                else:
-                    self._send(status if status else 502, resp)
-        finally:
-            activity_end(bid)
+            finally:
+                activity_end(bid)
+            return
+
+        # Non-stream: proxy, and on upstream failure with failover enabled
+        # (explicit "failover": true, or the "any" alias) retry once per
+        # remaining CHEAP_ORDER backend before giving up.
+        do_failover = failover_requested or model == "any"
+        status, resp = _proxy_attempt(bid, upstream, alias, suffix, payload, model)
+
+        if do_failover and (status == 0 or status >= 500):
+            tried = {bid}
+            for cand_bid in CHEAP_ORDER:
+                if cand_bid in tried:
+                    continue
+                tried.add(cand_bid)
+                ok, cand_models, _ = backend_status(cand_bid)
+                chat_models = [m for m in cand_models if "embed" not in m.lower()] if ok else []
+                if not chat_models:
+                    continue
+                log(f"failover: {bid} failed (status={status}) → trying {cand_bid}")
+                bid = cand_bid
+                upstream = chat_models[0]
+                status, resp = _proxy_attempt(bid, upstream, alias, suffix, payload, model)
+                if not (status == 0 or status >= 500):
+                    break
+
+        if status == 0:
+            self._send(502, resp)
+        else:
+            self._send(status if status else 502, resp)
 
     def _proxy_stream(self, url: str, body: bytes) -> None:
         req = urllib.request.Request(url, data=body, method="POST")
@@ -586,6 +737,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     host = CFG.get("listen_host", "0.0.0.0")
     port = int(CFG.get("listen_port", 4000))
+    _load_stats()
     log(f"Honeycomb gateway → http://{host}:{port}")
     log(f"config: {CONFIG_PATH}")
     for bid, be in BACKENDS.items():
