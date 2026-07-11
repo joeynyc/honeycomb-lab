@@ -4,6 +4,7 @@ struct NodeInspector: View {
     let node: LabNode?
     var history: HealthHistory?
     var control: NodeControl?
+    var doctor: DoctorService?
     let onRefresh: () -> Void
     let onSSH: () -> Void
     @State private var ping = PingService()
@@ -200,6 +201,18 @@ struct NodeInspector: View {
                     .buttonStyle(.plain)
                     .disabled(ping.isPinging)
                 }
+                if let doctor, node.doctorCommand != nil, node.sshHost != nil {
+                    let busy = doctor.busyNodeID == node.id
+                    Button {
+                        Task {
+                            await doctor.scan(node)
+                        }
+                    } label: {
+                        labelChip(busy ? "SCAN…" : "DOCTOR")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+                }
                 if let control, let target = control.target(for: node) {
                     let busy = control.busyNodeID == node.id
                     if node.inferenceOK {
@@ -255,10 +268,73 @@ struct NodeInspector: View {
                 row("CTRL", r.message)
                     .foregroundStyle(r.isError ? LabTheme.alert : LabTheme.text)
             }
+            if let report = doctor?.report(for: node.id) {
+                doctorSection(report)
+            }
         }
         .onChange(of: node.id) { _, _ in
             ping.clear()
             pendingAction = nil
+        }
+    }
+
+    /// spark-doctor findings: worst severity first, action hints inline.
+    @ViewBuilder
+    private func doctorSection(_ report: DoctorService.Report) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text("DOCTOR")
+                    .font(LabTheme.monoTiny)
+                    .foregroundStyle(LabTheme.phosphorDim)
+                Text(report.date.formatted(date: .omitted, time: .shortened))
+                    .font(LabTheme.monoTiny)
+                    .foregroundStyle(LabTheme.dim)
+            }
+            if let err = report.error {
+                Text(err)
+                    .font(LabTheme.monoSmall)
+                    .foregroundStyle(LabTheme.alert)
+            } else if report.findings.isEmpty {
+                Text("● all clear — no findings")
+                    .font(LabTheme.monoSmall)
+                    .foregroundStyle(LabTheme.phosphorDim)
+            } else {
+                ForEach(report.findings.prefix(4)) { finding in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(severityGlyph(finding.severity)) \(finding.title)")
+                            .font(LabTheme.monoSmall)
+                            .foregroundStyle(severityColor(finding.severity))
+                        if let action = finding.recommendedActions.first {
+                            Text("→ \(action)")
+                                .font(LabTheme.monoTiny)
+                                .foregroundStyle(LabTheme.textMuted)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+                if report.findings.count > 4 {
+                    Text("+ \(report.findings.count - 4) more findings")
+                        .font(LabTheme.monoTiny)
+                        .foregroundStyle(LabTheme.textMuted)
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func severityGlyph(_ s: String) -> String {
+        switch s {
+        case "critical": return "✖"
+        case "warning": return "◐"
+        default: return "·"
+        }
+    }
+
+    private func severityColor(_ s: String) -> Color {
+        switch s {
+        case "critical": return LabTheme.alert
+        case "warning": return LabTheme.amber
+        default: return LabTheme.text
         }
     }
 

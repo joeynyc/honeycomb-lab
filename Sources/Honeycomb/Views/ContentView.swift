@@ -36,6 +36,7 @@ struct ContentView: View {
                         node: monitor.selectedNode,
                         history: monitor.history,
                         control: monitor.control,
+                        doctor: monitor.doctor,
                         onRefresh: {
                             Task { await monitor.refreshAll() }
                         },

@@ -67,6 +67,8 @@ struct LabNode: Identifiable, Sendable, Equatable {
     var container: String?
     /// LM Link peer name (lmlink-peer probes)
     var lmLinkPeer: String?
+    /// Remote command producing a spark-doctor scan JSON on stdout
+    var doctorCommand: String?
     var isHub: Bool
     var notes: String
 

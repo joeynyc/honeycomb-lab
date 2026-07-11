@@ -21,6 +21,8 @@ final class HealthMonitor {
     let history = HealthHistory()
     /// Remote start/stop of inference containers
     let control = NodeControl()
+    /// spark-doctor diagnostics for nodes that configure a doctorCommand
+    let doctor = DoctorService()
     private let session: URLSession
     private let pollInterval: Duration
     private let gatewayURL = URL(string: "http://127.0.0.1:4000/health")!
@@ -96,6 +98,8 @@ final class HealthMonitor {
 
         for (id, result) in results {
             guard let idx = nodes.firstIndex(where: { $0.id == id }) else { continue }
+            let inferenceDied = nodes[idx].inferenceOK && !result.inferenceOK
+                && nodes[idx].lastChecked != nil
             nodes[idx].health = result.health
             nodes[idx].latencyMs = result.latencyMs
             nodes[idx].models = result.models
@@ -106,12 +110,28 @@ final class HealthMonitor {
             nodes[idx].statusDetail = result.detail
             nodes[idx].lastChecked = Date()
             nodes[idx].metrics = computeTokRate(id: id, metrics: result.metrics)
-            history.record(
+
+            // Doctor overlay: online but with fresh critical findings = degraded.
+            if nodes[idx].health == .online,
+               let report = doctor.freshReport(for: id), report.hasCritical {
+                nodes[idx].health = .degraded
+            }
+
+            let transitioned = history.record(
                 nodeID: id,
                 nodeName: nodes[idx].name,
-                health: result.health,
+                health: nodes[idx].health,
                 latencyMs: result.latencyMs
             )
+            // Auto-diagnose when the node can explain itself: vLLM died while
+            // the host is still reachable, or the whole node just dropped
+            // (the scan may still get through on a flapping link).
+            let shouldDiagnose = (inferenceDied && result.sshOK)
+                || (transitioned && nodes[idx].health == .offline)
+            if shouldDiagnose, nodes[idx].doctorCommand != nil, nodes[idx].sshHost != nil {
+                let node = nodes[idx]
+                Task { await self.doctor.scan(node) }
+            }
             // Lit = gateway saw traffic to this node's backend recently
             // (litAliases narrows shared backends, e.g. hub vs LM Link peer)
             nodes[idx].isStreaming = {

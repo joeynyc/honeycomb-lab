@@ -39,6 +39,8 @@ struct FleetConfig: Codable, Sendable {
         var container: String?
         /// LM Link peer name to look for (lmlink-peer probes)
         var lmLinkPeer: String?
+        /// Remote command that prints a spark-doctor scan JSON to stdout
+        var doctorCommand: String?
         var hub: Bool?
         var axial: [Int]?
         var notes: String?
@@ -98,6 +100,7 @@ enum FleetStore {
                 pingAlias: n.pingAlias,
                 container: n.container,
                 lmLinkPeer: n.lmLinkPeer,
+                doctorCommand: n.doctorCommand,
                 isHub: n.hub ?? (probe == .lmstudioHub),
                 notes: n.notes ?? "",
                 axial: (q: axial.0, r: axial.1)
