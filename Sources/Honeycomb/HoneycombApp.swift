@@ -10,10 +10,12 @@ struct HoneycombApp: App {
         WindowGroup("Honeycomb Lab", id: "main") {
             ContentView(monitor: monitor)
                 .onAppear {
+                    // Keep monitoring even when this window closes — the
+                    // menu bar panel shows live node state for the app's
+                    // whole lifetime.
                     monitor.start()
                     Self.applyDockIcon()
                 }
-                .onDisappear { monitor.stop() }
         }
         .defaultSize(width: 1080, height: 700)
         .commands {

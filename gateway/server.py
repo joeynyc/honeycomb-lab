@@ -232,7 +232,12 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        log(f"{self.address_string()} {fmt % args}")
+        line = fmt % args
+        # Health polls arrive every few seconds; logging them bloats the
+        # launchd log by ~19k lines/day with zero signal.
+        if '"GET /health' in line and line.rstrip(" -").endswith("200"):
+            return
+        log(f"{self.address_string()} {line}")
 
     def _send(self, code: int, body: bytes, content_type: str = "application/json") -> None:
         self.send_response(code)
@@ -354,7 +359,12 @@ class Handler(BaseHTTPRequestHandler):
                     ).encode(),
                 )
                 return
-            if models:
+            # Prefer a chat-capable model: embedding models can't serve
+            # /chat/completions but may sort first in the backend's list.
+            chat_models = [m for m in models if "embed" not in m.lower()]
+            if chat_models:
+                upstream = chat_models[0]
+            elif models:
                 upstream = models[0]
             else:
                 upstream = model if model not in ALIASES else "default"

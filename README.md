@@ -80,6 +80,13 @@ curl -s http://127.0.0.1:4000/v1/chat/completions \
 | Mac mini | Hub | This machine | LM Studio `:1234` |
 | PC 4080 | Desktop GPU | LM Link peer ZeroCool | Load model on PC |
 
+## PING diagnostic
+
+Select a hex → **PING** in the inspector. Fires one tiny prompt through the
+gateway using that node's alias and shows latency · tok/s · response snippet
+inline. Rides the same wire as real clients, so the hex goes LIT — a one-click
+self-test of gateway + backend + model.
+
 ## Node “LIT” (traffic pulse)
 
 When something (OMP, Cursor, curl) hits the **gateway**, Honeycomb lights the hex that received traffic for ~8s:
