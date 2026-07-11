@@ -19,6 +19,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -148,6 +149,54 @@ def backend_healthy(base_url: str) -> tuple[bool, list[str], float | None]:
         return True, [], ms
 
 
+# Probe cache: /health and /v1/models must never stack serial 3s timeouts
+# when a backend host is unreachable — probe concurrently and reuse results
+# for a couple of seconds.
+_probe_lock = threading.Lock()
+_probe_cache: dict[str, tuple[float, tuple[bool, list[str], float | None]]] = {}
+_probe_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="probe")
+PROBE_TTL_SEC = 2.5
+
+
+_probe_refreshing: set[str] = set()
+
+
+def _probe_refresh(bid: str) -> None:
+    be = BACKENDS.get(bid)
+    result = backend_healthy(be["base_url"]) if be else (False, [], None)
+    with _probe_lock:
+        _probe_cache[bid] = (time.time(), result)
+        _probe_refreshing.discard(bid)
+
+
+def backend_status(bid: str) -> tuple[bool, list[str], float | None]:
+    """backend_healthy with a stale-while-revalidate cache, keyed by backend id.
+
+    Fresh hit → cached result. Stale hit → cached result now, refresh in the
+    background. Only a cold miss (first probe ever) blocks — so /health stays
+    fast even while an unreachable host makes probes eat their full timeout.
+    """
+    now = time.time()
+    with _probe_lock:
+        hit = _probe_cache.get(bid)
+        if hit:
+            if now - hit[0] >= PROBE_TTL_SEC and bid not in _probe_refreshing:
+                _probe_refreshing.add(bid)
+                _probe_pool.submit(_probe_refresh, bid)
+            return hit[1]
+    be = BACKENDS.get(bid)
+    result = backend_healthy(be["base_url"]) if be else (False, [], None)
+    with _probe_lock:
+        _probe_cache[bid] = (time.time(), result)
+    return result
+
+
+def all_backend_status() -> dict[str, tuple[bool, list[str], float | None]]:
+    """Probe every backend concurrently; worst case = one probe timeout."""
+    futures = {bid: _probe_pool.submit(backend_status, bid) for bid in BACKENDS}
+    return {bid: f.result() for bid, f in futures.items()}
+
+
 def resolve_model(model: str | None) -> tuple[str, str, str | None]:
     """Return (backend_id, upstream_model_or_empty, alias_used)."""
     if not model or model in ("default", "auto"):
@@ -185,6 +234,7 @@ def resolve_model(model: str | None) -> tuple[str, str, str | None]:
 def merge_models() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
+    statuses = all_backend_status()
 
     # Stable aliases first
     for alias, spec in ALIASES.items():
@@ -192,7 +242,7 @@ def merge_models() -> list[dict[str, Any]]:
             continue
         bid = spec["backend"]
         be = BACKENDS.get(bid, {})
-        ok, upstream, _ = backend_healthy(be.get("base_url", ""))
+        ok, upstream, _ = statuses.get(bid, (False, [], None))
         entry = {
             "id": alias,
             "object": "model",
@@ -207,7 +257,7 @@ def merge_models() -> list[dict[str, Any]]:
 
     # Live upstream models as backend/model ids
     for bid, be in BACKENDS.items():
-        ok, models, _ = backend_healthy(be.get("base_url", ""))
+        ok, models, _ = statuses.get(bid, (False, [], None))
         if not ok:
             continue
         for mid in models:
@@ -264,8 +314,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/health"):
             backends = {}
             act = activity_snapshot()
+            statuses = all_backend_status()
             for bid, be in BACKENDS.items():
-                ok, models, ms = backend_healthy(be["base_url"])
+                ok, models, ms = statuses[bid]
                 a = act.get(bid, {})
                 backends[bid] = {
                     "name": be.get("name"),
@@ -344,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # If alias has no fixed upstream, pick first healthy model on backend
         if not upstream:
-            ok, models, _ = backend_healthy(base)
+            ok, models, _ = backend_status(bid)
             if not ok:
                 self._send(
                     502,
@@ -397,6 +448,7 @@ class Handler(BaseHTTPRequestHandler):
         req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "text/event-stream")
+        headers_sent = False
         try:
             with urllib.request.urlopen(req, timeout=300.0) as resp:
                 self.send_response(resp.status)
@@ -406,20 +458,30 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "close")
                 self.end_headers()
+                headers_sent = True
                 while True:
                     chunk = resp.read(4096)
                     if not chunk:
                         break
                     self.wfile.write(chunk)
                     self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # Client hung up mid-stream (closed the chat) — normal, not an error.
+            log("stream client disconnected")
         except urllib.error.HTTPError as e:
             err = e.read()
-            self._send(e.code, err or json.dumps({"error": str(e)}).encode())
+            if not headers_sent:
+                self._send(e.code, err or json.dumps({"error": str(e)}).encode())
         except Exception as e:
-            self._send(
-                502,
-                json.dumps({"error": {"message": str(e), "type": "stream_error"}}).encode(),
-            )
+            # Once the 200 + headers are on the wire we can't send a second
+            # response — just log and drop the connection.
+            if headers_sent:
+                log(f"stream error after headers: {e}")
+            else:
+                self._send(
+                    502,
+                    json.dumps({"error": {"message": str(e), "type": "stream_error"}}).encode(),
+                )
 
 
 def main() -> None:

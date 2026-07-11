@@ -123,7 +123,9 @@ final class HealthMonitor {
 
     private nonisolated static func fetchGateway(session: URLSession, url: URL) async -> GatewaySnapshot {
         var request = URLRequest(url: url)
-        request.timeoutInterval = 2
+        // Headroom over the gateway's own worst case (one cold backend probe)
+        // so a slow backend never reads as "gateway down".
+        request.timeoutInterval = 4
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
@@ -254,76 +256,39 @@ final class HealthMonitor {
 
     /// Loaded models only (`lms ps`), optionally filtered by DEVICE column.
     private nonisolated static func listLMStudioLoadedModels(deviceFilter: String?) async -> [String] {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .utility).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                process.arguments = ["-lc", "lms ps 2>/dev/null"]
-                let out = Pipe()
-                process.standardOutput = out
-                process.standardError = Pipe()
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    if text.localizedCaseInsensitiveContains("No models are currently loaded") {
-                        cont.resume(returning: [])
-                        return
-                    }
-                    var found: [String] = []
-                    for line in text.components(separatedBy: .newlines) {
-                        let trimmed = line.trimmingCharacters(in: .whitespaces)
-                        guard !trimmed.isEmpty,
-                              !trimmed.hasPrefix("IDENTIFIER"),
-                              !trimmed.hasPrefix("LLM"),
-                              !trimmed.hasPrefix("EMBEDDING"),
-                              !trimmed.hasPrefix("To load"),
-                              !trimmed.hasPrefix("SIZE")
-                        else { continue }
-                        if let filter = deviceFilter {
-                            guard line.localizedCaseInsensitiveContains(filter) else { continue }
-                        } else {
-                            // Local hub: skip rows that are only on a remote device name
-                            // (lms ps format varies; keep lines without a remote peer if ambiguous)
-                            if line.localizedCaseInsensitiveContains("ZeroCool") { continue }
-                        }
-                        let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-                        if let id = parts.first, id.count > 2 {
-                            found.append(id)
-                        }
-                    }
-                    cont.resume(returning: found)
-                } catch {
-                    cont.resume(returning: [])
-                }
+        let text = await lmsOutput(["ps"], cacheKey: "lms-ps")
+        if text.localizedCaseInsensitiveContains("No models are currently loaded") {
+            return []
+        }
+        var found: [String] = []
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty,
+                  !trimmed.hasPrefix("IDENTIFIER"),
+                  !trimmed.hasPrefix("LLM"),
+                  !trimmed.hasPrefix("EMBEDDING"),
+                  !trimmed.hasPrefix("To load"),
+                  !trimmed.hasPrefix("SIZE")
+            else { continue }
+            if let filter = deviceFilter {
+                guard line.localizedCaseInsensitiveContains(filter) else { continue }
+            } else {
+                // Local hub: skip rows that are only on a remote device name
+                // (lms ps format varies; keep lines without a remote peer if ambiguous)
+                if line.localizedCaseInsensitiveContains("ZeroCool") { continue }
+            }
+            let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            if let id = parts.first, id.count > 2 {
+                found.append(id)
             }
         }
+        return found
     }
 
     private nonisolated static func checkLMLinkSelf() async -> (Bool, String) {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .utility).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                process.arguments = ["-lc", "lms link status 2>/dev/null"]
-                let out = Pipe()
-                process.standardOutput = out
-                process.standardError = Pipe()
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    let online = text.localizedCaseInsensitiveContains("Status: Online")
-                        || text.localizedCaseInsensitiveContains("Status: online")
-                    cont.resume(returning: (
-                        online,
-                        online ? "link self online" : "lm link offline on mini"
-                    ))
-                } catch {
-                    cont.resume(returning: (false, error.localizedDescription))
-                }
-            }
-        }
+        let text = await lmsOutput(["link", "status"], cacheKey: "lms-link-status")
+        let online = text.localizedCaseInsensitiveContains("Status: Online")
+        return (online, online ? "link self online" : "lm link offline on mini")
     }
 
     /// PC RTX 4080 — LM Link peer (ZeroCool) is the real connection.
@@ -392,77 +357,40 @@ final class HealthMonitor {
 
     /// Parse `lms link status` for a named peer (e.g. ZeroCool).
     private nonisolated static func checkLMLinkPeer(name: String) async -> (Bool, String) {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .utility).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                process.arguments = ["-lc", "lms link status 2>/dev/null"]
-                let out = Pipe()
-                process.standardOutput = out
-                process.standardError = Pipe()
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    let data = out.fileHandleForReading.readDataToEndOfFile()
-                    let text = String(data: data, encoding: .utf8) ?? ""
-                    // Look for peer block: "- ZeroCool" then "Status: connected"
-                    let connected: Bool = {
-                        let lines = text.components(separatedBy: .newlines)
-                        var inPeer = false
-                        for line in lines {
-                            let t = line.trimmingCharacters(in: .whitespaces)
-                            if t.hasPrefix("- ") {
-                                inPeer = t.dropFirst(2).lowercased().contains(name.lowercased())
-                            } else if inPeer && t.lowercased().hasPrefix("status:") {
-                                return t.lowercased().contains("connected")
-                                    || t.lowercased().contains("online")
-                            }
-                        }
-                        // fallback: name + connected anywhere
-                        return text.localizedCaseInsensitiveContains(name)
-                            && text.localizedCaseInsensitiveContains("connected")
-                    }()
-                    cont.resume(returning: (
-                        connected,
-                        connected ? "\(name) connected" : "\(name) not in link mesh"
-                    ))
-                } catch {
-                    cont.resume(returning: (false, error.localizedDescription))
+        let text = await lmsOutput(["link", "status"], cacheKey: "lms-link-status")
+        // Look for peer block: "- ZeroCool" then "Status: connected"
+        let connected: Bool = {
+            let lines = text.components(separatedBy: .newlines)
+            var inPeer = false
+            for line in lines {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("- ") {
+                    inPeer = t.dropFirst(2).lowercased().contains(name.lowercased())
+                } else if inPeer && t.lowercased().hasPrefix("status:") {
+                    return t.lowercased().contains("connected")
+                        || t.lowercased().contains("online")
                 }
             }
-        }
+            // fallback: name + connected anywhere
+            return text.localizedCaseInsensitiveContains(name)
+                && text.localizedCaseInsensitiveContains("connected")
+        }()
+        return (connected, connected ? "\(name) connected" : "\(name) not in link mesh")
     }
 
     /// Models listed under a remote device in `lms ls` (DEVICE column).
     private nonisolated static func listLMStudioModelsOnDevice(device: String) async -> [String] {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .utility).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                process.arguments = ["-lc", "lms ls 2>/dev/null"]
-                let out = Pipe()
-                process.standardOutput = out
-                process.standardError = Pipe()
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    let data = out.fileHandleForReading.readDataToEndOfFile()
-                    let text = String(data: data, encoding: .utf8) ?? ""
-                    var found: [String] = []
-                    for line in text.components(separatedBy: .newlines) {
-                        guard line.localizedCaseInsensitiveContains(device) else { continue }
-                        // First column-ish token is model id
-                        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-                        if let first = parts.first, first.count > 2, !first.hasPrefix("LLM") {
-                            found.append(first)
-                        }
-                    }
-                    cont.resume(returning: found)
-                } catch {
-                    cont.resume(returning: [])
-                }
+        let text = await lmsOutput(["ls"], cacheKey: "lms-ls")
+        var found: [String] = []
+        for line in text.components(separatedBy: .newlines) {
+            guard line.localizedCaseInsensitiveContains(device) else { continue }
+            // First column-ish token is model id
+            let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            if let first = parts.first, first.count > 2, !first.hasPrefix("LLM") {
+                found.append(first)
             }
         }
+        return found
     }
 
     /// JoeyDGX / gx10 — SSH is the ground truth for "is the Spark connected?"
@@ -575,34 +503,141 @@ final class HealthMonitor {
         )
     }
 
+    // MARK: - Subprocess plumbing
+
+    /// Result of a completed subprocess.
+    private struct CommandResult: Sendable {
+        var status: Int32
+        var output: String
+    }
+
+    /// `lms` CLI location — invoked directly, never via a login shell.
+    private nonisolated static let lmsPath: String = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "\(home)/.lmstudio/bin/lms",
+            "/opt/homebrew/bin/lms",
+            "/usr/local/bin/lms",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+            ?? "/usr/bin/false"
+    }()
+
+    /// Run a command with a hard timeout. Returns nil on launch failure or
+    /// timeout (the child is SIGKILLed). stderr is discarded and stdout is
+    /// drained concurrently, so the child can never block on a full pipe and
+    /// no thread ever parks in waitUntilExit.
+    private nonisolated static func runCommand(
+        _ path: String,
+        _ args: [String],
+        timeout: TimeInterval
+    ) async -> CommandResult? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = args
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+
+        let exitStream = AsyncStream<Void> { continuation in
+            process.terminationHandler = { _ in
+                continuation.yield(())
+                continuation.finish()
+            }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        // Drain stdout off the exit-wait path.
+        let reader = Task.detached(priority: .utility) {
+            (try? out.fileHandleForReading.readToEnd()) ?? Data()
+        }
+
+        let exited = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in exitStream { break }
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(timeout))
+                return false
+            }
+            let first = await group.next() ?? false
+            if !first {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            group.cancelAll()
+            return first
+        }
+
+        let data = await reader.value
+        guard exited else { return nil }
+        return CommandResult(
+            status: process.terminationStatus,
+            output: String(data: data, encoding: .utf8) ?? ""
+        )
+    }
+
+    /// Subprocess probes are expensive (a fork per call) and their answers
+    /// change slowly — cache per command line and collapse concurrent callers,
+    /// so e.g. the mini and PC probes asking for `lms ps` in the same tick
+    /// share one child process.
+    private actor CommandCache {
+        static let shared = CommandCache()
+        private var entries: [String: (Date, CommandResult?)] = [:]
+        private var inFlight: [String: Task<CommandResult?, Never>] = [:]
+
+        func value(
+            key: String,
+            ttl: TimeInterval,
+            compute: @Sendable @escaping () async -> CommandResult?
+        ) async -> CommandResult? {
+            if let (stamp, cached) = entries[key], Date().timeIntervalSince(stamp) < ttl {
+                return cached
+            }
+            if let running = inFlight[key] {
+                return await running.value
+            }
+            let task = Task { await compute() }
+            inFlight[key] = task
+            let result = await task.value
+            entries[key] = (Date(), result)
+            inFlight[key] = nil
+            return result
+        }
+    }
+
+    private nonisolated static func lmsOutput(_ args: [String], cacheKey: String) async -> String {
+        let result = await CommandCache.shared.value(key: cacheKey, ttl: 15) {
+            await runCommand(lmsPath, args, timeout: 8)
+        }
+        return result?.output ?? ""
+    }
+
     // MARK: - Checks
 
     private nonisolated static func checkSSH(host: String) async -> (Bool, String?) {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .utility).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-                process.arguments = [
+        let result = await CommandCache.shared.value(key: "ssh:\(host)", ttl: 10) {
+            await runCommand(
+                "/usr/bin/ssh",
+                [
                     "-o", "BatchMode=yes",
                     "-o", "ConnectTimeout=3",
                     "-o", "StrictHostKeyChecking=accept-new",
                     "-o", "ConnectionAttempts=1",
                     host,
-                    "echo", "ok"
-                ]
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = Pipe()
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    let ok = process.terminationStatus == 0
-                    cont.resume(returning: (ok, ok ? nil : "ssh exit \(process.terminationStatus)"))
-                } catch {
-                    cont.resume(returning: (false, error.localizedDescription))
-                }
-            }
+                    "echo", "ok",
+                ],
+                timeout: 6
+            )
         }
+        guard let result else { return (false, "ssh timeout") }
+        let ok = result.status == 0
+        return (ok, ok ? nil : "ssh exit \(result.status)")
     }
 
     private nonisolated static func checkHTTPAlive(url: URL, session: URLSession) async -> Bool {
