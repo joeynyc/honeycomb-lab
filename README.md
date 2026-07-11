@@ -68,9 +68,7 @@ cp -R Honeycomb.app /Applications/    # keep a real install
 # 3. Web dashboard — already live: open http://<hub-ip>:4000 in a browser
 ```
 
-To run the gateway as a service (start at login, restart on crash), see
-`docs/launchd.md` pattern in the launchctl comments of `gateway/start.sh`,
-or create a LaunchAgent that runs `gateway/start.sh`.
+To run the gateway as a service (start at login, restart on crash), see [docs/launchd.md](docs/launchd.md).
 
 ## The gateway
 
@@ -116,11 +114,20 @@ Served by the gateway at `/` for browsers (API clients still get JSON).
 Full feature parity: map, LIT pulses, inspector with metrics + latency
 trend, traffic feed, and PING/DOCTOR/SERVE/STOP.
 
-**Security:** control actions from anywhere but localhost require the
-`X-Honeycomb-Token` header. Set `control_token` in `gateway/config.json`
-(e.g. `openssl rand -hex 16`); the dashboard prompts once and remembers
-it. The gateway listens LAN-wide by default — keep it on a trusted
-network or a tailnet.
+**Security model:**
+- Control actions (`/control/*`) require the `X-Honeycomb-Token` header
+  from anywhere but localhost. Set `control_token` in `config.json`
+  (`openssl rand -hex 16`); the dashboard prompts once and remembers it.
+  The example config's `__REPLACE_ME__` sentinel never authorizes.
+- Requests must address the hub by IP literal or localhost. To reach it
+  by hostname (e.g. a tailnet MagicDNS name), add that name to
+  `allowed_hosts` — this blocks DNS-rebinding attacks that would
+  otherwise let a malicious web page inherit the localhost exemption.
+- Control responses carry no CORS headers, so a page in your browser
+  can't script them; doctor findings in `/nodes` are only returned to
+  authorized callers.
+- There is no TLS: the gateway is built for a trusted LAN or a tailnet
+  (Tailscale/WireGuard), not the open internet. Don't port-forward it.
 
 ## spark-doctor integration
 

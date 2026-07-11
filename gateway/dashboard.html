@@ -1141,8 +1141,12 @@
 
   // ---------- Polling ----------
   function poll() {
+    // Send the token when we have one: doctor findings in /nodes are only
+    // returned to callers authorized for control actions.
+    var pollToken = getToken();
+    var nodeHeaders = pollToken ? { "X-Honeycomb-Token": pollToken } : {};
     Promise.all([
-      fetch("/nodes", { cache: "no-store" }).then(function (r) {
+      fetch("/nodes", { cache: "no-store", headers: nodeHeaders }).then(function (r) {
         if (!r.ok) throw new Error("nodes " + r.status);
         return r.json();
       }),

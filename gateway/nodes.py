@@ -164,10 +164,11 @@ def _probe_vllm_ssh(node: dict[str, Any]) -> dict[str, Any]:
             gen = vm.get("genTokensTotal")
             if gen is not None:
                 now = time.time()
-                prev = _gen_history.get(node["id"])
+                with _lock:  # probes run concurrently in a thread pool
+                    prev = _gen_history.get(node["id"])
+                    _gen_history[node["id"]] = (now, gen)
                 if prev and gen >= prev[1] and now - prev[0] > 0.5:
                     metrics["genTokPerSec"] = (gen - prev[1]) / (now - prev[0])
-                _gen_history[node["id"]] = (now, gen)
 
     health = "online" if ssh_ok else ("online" if infer_ok else "offline")
     parts = []

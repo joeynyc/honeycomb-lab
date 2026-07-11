@@ -2,8 +2,11 @@
   "listen_host": "0.0.0.0",
   "listen_port": 4000,
   "default_model": "spark-main",
-  "cheap_order": ["lms", "spark1"],
-  "control_token": "generate-with: openssl rand -hex 16",
+  "cheap_order": [
+    "lms",
+    "spark1"
+  ],
+  "control_token": "__REPLACE_ME__",
   "backends": {
     "spark1": {
       "name": "Spark One (vLLM)",
@@ -17,8 +20,20 @@
     }
   },
   "aliases": {
-    "spark-main": { "backend": "spark1", "upstream_model": null },
-    "local-lms": { "backend": "lms", "upstream_model": null },
-    "default": { "backend": "spark1", "upstream_model": null }
-  }
+    "spark-main": {
+      "backend": "spark1",
+      "upstream_model": null
+    },
+    "local-lms": {
+      "backend": "lms",
+      "upstream_model": null
+    },
+    "default": {
+      "backend": "spark1",
+      "upstream_model": null
+    }
+  },
+  "allowed_hosts": [
+    "my-hub.tailnet-name.ts.net"
+  ]
 }

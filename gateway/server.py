@@ -13,6 +13,8 @@ Routes by model alias (config.json) or passthrough model@backend / backend/model
 from __future__ import annotations
 
 import collections
+import hmac
+import ipaddress
 import json
 import os
 import sys
@@ -534,7 +536,13 @@ class Handler(BaseHTTPRequestHandler):
     MAX_BODY_BYTES = 32 * 1024 * 1024  # plenty for chat payloads
 
     def _read_body(self) -> bytes:
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._send(400, json.dumps({"error": {"message": "bad Content-Length"}}).encode())
+            raise ConnectionAbortedError("bad content-length") from None
+        if n < 0:
+            n = 0
         if n > self.MAX_BODY_BYTES:
             # Refuse to buffer absurd payloads into memory.
             self._send(413, json.dumps({"error": {"message": "request too large"}}).encode())
@@ -563,6 +571,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/nodes":
             payload = fleet_nodes.snapshot(activity_snapshot())
+            # Doctor findings describe the machine's config/health posture —
+            # only hand them to callers who could have run the scan anyway.
+            if not self._control_authorized():
+                for n in payload.get("nodes", []):
+                    n["doctor"] = None
             self._send(200, json.dumps(payload).encode())
             return
 
@@ -634,19 +647,44 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, json.dumps({"error": {"message": f"not found: {path}"}}).encode())
 
+    def _host_is_literal(self) -> bool:
+        """True when the Host header is an IP literal or localhost.
+
+        Browsers doing DNS rebinding must send the attacker's *domain* in
+        Host, even after the name resolves to 127.0.0.1 — so requiring a
+        literal address defeats rebinding without breaking real clients
+        (the app, curl, and the dashboard all address the hub by IP or
+        localhost).
+        """
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if host in ("localhost", "127.0.0.1", "::1", ""):
+            return True
+        try:
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            # A MagicDNS/tailnet name is a legitimate way to reach the hub;
+            # allow explicitly configured hostnames only.
+            return host in {h.lower() for h in CFG.get("allowed_hosts", [])}
+
+    def _token_valid(self) -> bool:
+        token = CFG.get("control_token") or ""
+        supplied = self.headers.get("X-Honeycomb-Token") or ""
+        # Placeholder values from the example config never authorize.
+        if not token or " " in token or token.startswith("__"):
+            return False
+        return hmac.compare_digest(supplied, token)
+
     def _control_authorized(self) -> bool:
-        """Control actions run remote commands — require the token except
-        from localhost (the Mac app / local curl)."""
+        """Control actions run remote commands. Localhost is exempt from the
+        token (the Mac app, local curl) — but only when the request also
+        carries a literal Host, so a rebound browser request can't inherit
+        the exemption."""
+        if not self._host_is_literal():
+            return False
         if self.client_address[0] in ("127.0.0.1", "::1"):
             return True
-        token = CFG.get("control_token")
-        supplied = self.headers.get("X-Honeycomb-Token") or ""
-        # Placeholder from the example config never authorizes anything.
-        if not token or " " in token:
-            return False
-        import hmac
-
-        return hmac.compare_digest(supplied, token)
+        return self._token_valid()
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path.rstrip("/") or "/"
@@ -708,7 +746,6 @@ class Handler(BaseHTTPRequestHandler):
         base = be["base_url"].rstrip("/")
 
         # If alias has no fixed upstream, pick first healthy model on backend
-        backend_unhealthy = False
         if not upstream:
             ok, models, _ = backend_status(bid)
             if not ok:
@@ -728,7 +765,6 @@ class Handler(BaseHTTPRequestHandler):
                         ).encode(),
                     )
                     return
-                backend_unhealthy = True
                 models = []
             # Prefer a chat-capable model: embedding models can't serve
             # /chat/completions but may sort first in the backend's list.
