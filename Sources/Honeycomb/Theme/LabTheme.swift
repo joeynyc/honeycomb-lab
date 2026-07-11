@@ -11,9 +11,14 @@ enum LabTheme {
     static let phosphor = Color(red: 0.49, green: 1.0, blue: 0.23)
     static let phosphorDim = Color(red: 0.29, green: 0.55, blue: 0.18)
 
-    /// Amber honeycomb strokes
+    /// Amber — reserved for degraded/warning states only
     static let amber = Color(red: 0.77, green: 0.64, blue: 0.35)
     static let amberDim = Color(red: 0.45, green: 0.38, blue: 0.22)
+
+    /// Neutral decorative strokes (lattice, panel borders, dividers) —
+    /// desaturated green so amber keeps its warning meaning
+    static let stroke = Color(red: 0.20, green: 0.30, blue: 0.20)
+    static let strokeDim = Color(red: 0.12, green: 0.18, blue: 0.12)
 
     static let dim = Color(red: 0.29, green: 0.42, blue: 0.29)
     static let text = Color(red: 0.72, green: 0.92, blue: 0.62)

@@ -9,7 +9,7 @@ struct NodeInspector: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            Divider().overlay(LabTheme.amberDim.opacity(0.4))
+            Divider().overlay(LabTheme.stroke.opacity(0.8))
             if let node {
                 detail(node)
             } else {
@@ -24,7 +24,7 @@ struct NodeInspector: View {
         .background(LabTheme.panel)
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(LabTheme.amberDim.opacity(0.45), lineWidth: 1)
+                .stroke(LabTheme.stroke.opacity(0.9), lineWidth: 1)
         )
     }
 
@@ -33,7 +33,7 @@ struct NodeInspector: View {
             Text("NODE // INSPECT")
                 .font(LabTheme.monoTiny)
                 .tracking(2)
-                .foregroundStyle(LabTheme.amber)
+                .foregroundStyle(LabTheme.phosphorDim)
             Spacer()
             Button(action: onRefresh) {
                 Text("↻ SCAN")
@@ -54,7 +54,7 @@ struct NodeInspector: View {
                 Spacer()
                 Text(node.role.rawValue)
                     .font(LabTheme.monoTiny)
-                    .foregroundStyle(LabTheme.amber)
+                    .foregroundStyle(LabTheme.phosphorDim)
             }
 
             row("HOST", "\(node.hostname) · \(node.hostAddress)")
@@ -100,7 +100,7 @@ struct NodeInspector: View {
 
             Text(node.id == "mini" || node.id == "pc4080" ? "LOADED MODELS" : "SERVING MODELS")
                 .font(LabTheme.monoTiny)
-                .foregroundStyle(LabTheme.amber)
+                .foregroundStyle(LabTheme.phosphorDim)
                 .padding(.top, 4)
 
             if node.models.isEmpty {

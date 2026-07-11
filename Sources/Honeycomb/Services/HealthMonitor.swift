@@ -35,11 +35,6 @@ final class HealthMonitor {
         return nodes.first(where: { $0.id == selectedNodeID })
     }
 
-    var statusLine: String {
-        let g = gatewayOK ? "GW●" : "GW○"
-        return g + " " + nodes.map { "\($0.role.shortLabel)\($0.health.glyph)" }.joined(separator: " ")
-    }
-
     var onlineCount: Int {
         nodes.filter { $0.health == .online || $0.health == .degraded }.count
     }

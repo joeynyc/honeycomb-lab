@@ -9,7 +9,7 @@ struct MenuBarPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().overlay(LabTheme.amberDim.opacity(0.45))
+            Divider().overlay(LabTheme.stroke.opacity(0.8))
 
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(monitor.nodes) { node in
@@ -18,7 +18,7 @@ struct MenuBarPanel: View {
             }
             .padding(10)
 
-            Divider().overlay(LabTheme.amberDim.opacity(0.45))
+            Divider().overlay(LabTheme.stroke.opacity(0.8))
 
             HStack(spacing: 8) {
                 menuButton("RESCAN") {
@@ -57,7 +57,7 @@ struct MenuBarPanel: View {
             Spacer()
             Text("\(monitor.onlineCount)/\(monitor.nodes.count)")
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(LabTheme.amber)
+                .foregroundStyle(LabTheme.phosphorDim)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -92,7 +92,7 @@ struct MenuBarPanel: View {
                 if !node.models.isEmpty {
                     Text(short(node.models[0]))
                         .font(LabTheme.monoTiny)
-                        .foregroundStyle(LabTheme.amber.opacity(0.8))
+                        .foregroundStyle(LabTheme.textMuted)
                         .lineLimit(1)
                         .frame(maxWidth: 90, alignment: .trailing)
                 }

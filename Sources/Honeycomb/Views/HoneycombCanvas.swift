@@ -27,9 +27,15 @@ struct HoneycombCanvas: View {
                 }
                 .allowsHitTesting(false)
 
-                // Connection edges under nodes
-                Canvas { context, size in
-                    drawEdges(context: context, center: center)
+                // Connection edges under nodes; pulses animate toward LIT nodes
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !anyStreaming)) { timeline in
+                    Canvas { context, size in
+                        drawEdges(
+                            context: context,
+                            center: center,
+                            time: timeline.date.timeIntervalSinceReferenceDate
+                        )
+                    }
                 }
                 .allowsHitTesting(false)
 
@@ -71,6 +77,10 @@ struct HoneycombCanvas: View {
         return path
     }
 
+    private var anyStreaming: Bool {
+        nodes.contains { $0.isStreaming }
+    }
+
     private func drawLattice(context: GraphicsContext, center: CGPoint) {
         let bgSize = hexSize * 0.92
         for q in -latticeRadius...latticeRadius {
@@ -83,14 +93,14 @@ struct HoneycombCanvas: View {
                 let path = hexPath(center: p, size: bgSize * 0.78)
                 context.stroke(
                     path,
-                    with: .color(LabTheme.amberDim.opacity(0.35)),
+                    with: .color(LabTheme.stroke.opacity(0.5)),
                     lineWidth: 1
                 )
             }
         }
     }
 
-    private func drawEdges(context: GraphicsContext, center: CGPoint) {
+    private func drawEdges(context: GraphicsContext, center: CGPoint, time: TimeInterval) {
         // Mini is hub; Sparks peer-linked; 4080 to mini
         let pairs: [(String, String)] = [
             ("mini", "joeydgx"),
@@ -112,10 +122,33 @@ struct HoneycombCanvas: View {
                 && (nb.health == .online || nb.health == .degraded)
             let color = bothLive
                 ? LabTheme.phosphor.opacity(0.35)
-                : LabTheme.amberDim.opacity(0.25)
+                : LabTheme.strokeDim.opacity(0.6)
             let width: CGFloat = (a == "joeydgx" && b == "gx10") ? 2.2 : 1.2
 
             context.stroke(path, with: .color(color), lineWidth: width)
+
+            // Traffic pulses travel hub → destination while the node is LIT
+            if a == "mini" && nb.isStreaming {
+                drawPulses(context: context, from: pa, to: pb, time: time)
+            }
+        }
+    }
+
+    /// Two glowing dots gliding along the edge — traffic direction made visible.
+    private func drawPulses(context: GraphicsContext, from: CGPoint, to: CGPoint, time: TimeInterval) {
+        for i in 0..<2 {
+            let phase = (time * 0.55 + Double(i) * 0.5).truncatingRemainder(dividingBy: 1.0)
+            let x = from.x + (to.x - from.x) * phase
+            let y = from.y + (to.y - from.y) * phase
+            let dot = CGRect(x: x - 3, y: y - 3, width: 6, height: 6)
+            context.fill(
+                Path(ellipseIn: dot.insetBy(dx: -2, dy: -2)),
+                with: .color(LabTheme.phosphor.opacity(0.25))
+            )
+            context.fill(
+                Path(ellipseIn: dot),
+                with: .color(LabTheme.phosphor.opacity(0.9))
+            )
         }
     }
 }
@@ -145,11 +178,12 @@ struct NodeHexView: View {
             }
             HexShape()
                 .fill(node.health.color.opacity(node.isStreaming ? 0.35 : fillOpacity))
+            // Health lives in the outline color; text stays quiet
             HexShape()
                 .stroke(
                     node.isStreaming
                         ? LabTheme.phosphor
-                        : (isSelected ? LabTheme.phosphor : LabTheme.amber.opacity(0.85)),
+                        : (isSelected ? LabTheme.phosphor : node.health.color.opacity(0.75)),
                     lineWidth: node.isStreaming ? 2.8 : (isSelected ? 2.4 : 1.5)
                 )
                 .shadow(
@@ -159,26 +193,19 @@ struct NodeHexView: View {
                     radius: node.isStreaming ? 14 : 8
                 )
 
-            VStack(spacing: 3) {
-                Text(node.role.shortLabel)
-                    .font(LabTheme.monoTiny)
-                    .foregroundStyle(LabTheme.amber)
-                    .tracking(1.2)
+            VStack(spacing: 4) {
                 Text(node.name)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(LabTheme.phosphor)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                // One line of truth: health
-                Text(node.health.glyph + " " + node.health.rawValue.uppercased())
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundStyle(node.health.color.opacity(0.9))
-                // How we're connected — never "OFF" while ONLINE
-                Text(node.pathBadge)
-                    .font(.system(size: 7, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(node.pathBadgeColor)
+                    .minimumScaleFactor(0.8)
+                Text(hexSubtitle)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(hexSubtitleColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
-            .padding(8)
+            .padding(10)
         }
         .frame(width: size * 1.7, height: size * 1.7)
         .contentShape(HexShape())
@@ -186,6 +213,31 @@ struct NodeHexView: View {
         .animation(.easeOut(duration: 0.15), value: isSelected)
         .animation(.easeOut(duration: 0.25), value: node.health)
         .animation(.easeInOut(duration: 0.35), value: node.isStreaming)
+    }
+
+    /// One quiet line: traffic beats trouble beats what's serving.
+    private var hexSubtitle: String {
+        if node.isStreaming { return "LIT" }
+        switch node.health {
+        case .offline: return "OFFLINE"
+        case .degraded: return "DEGRADED"
+        case .unknown: return "…"
+        case .online:
+            if let model = node.models.first {
+                let base = model.split(separator: "/").last.map(String.init) ?? model
+                return base.count > 14 ? String(base.prefix(12)) + "…" : base
+            }
+            return node.role.shortLabel
+        }
+    }
+
+    private var hexSubtitleColor: Color {
+        if node.isStreaming { return LabTheme.phosphor }
+        switch node.health {
+        case .offline: return LabTheme.alert
+        case .degraded: return LabTheme.amber
+        default: return LabTheme.textMuted
+        }
     }
 }
 
