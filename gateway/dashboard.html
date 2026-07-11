@@ -463,6 +463,14 @@
     }).then(function (r) {
       return r.json().catch(function () { return null; }).then(function (data) {
         if (!data) data = { ok: false, error: "HTTP " + r.status };
+        // An error body ({"error":{"message":...}}) is truthy but has no
+        // `ok` — without this it rendered as a blank success line.
+        if (!r.ok || data.ok === undefined) {
+          var msg = (data.error && (data.error.message || data.error)) ||
+                    ("HTTP " + r.status);
+          if (r.status === 401) msg = "control token required or invalid";
+          data = { ok: false, error: msg };
+        }
         return { status: r.status, data: data };
       });
     });
@@ -647,7 +655,8 @@
         fill: "#B8EB9E",
         "font-family": "inherit"
       });
-      name.textContent = n.name || n.id;
+      // Long names must not spill across neighbouring hexes.
+      name.textContent = truncEnd(String(n.name || n.id), 12);
       g.appendChild(name);
 
       var subLabel, subColor;

@@ -314,9 +314,23 @@ def snapshot(activity: dict[str, Any]) -> dict[str, Any]:
         fleet = dict(_fleet)
         status = {k: dict(v) for k, v in _status.items()}
 
-    ring = [(0, -1), (-1, 0), (1, 0), (0, 1), (-1, 1), (1, -1), (-2, 1), (2, -1)]
+    # Unlimited hex spiral so a growing fleet never collides at (0,0)
+    def _spiral(taken: set) -> list:
+        out = []
+        for radius in range(1, 12):
+            q, r = -radius, radius
+            for dq, dr in [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)]:
+                for _ in range(radius):
+                    if (q, r) not in taken and (q, r) != (0, 0):
+                        out.append((q, r))
+                    q += dq
+                    r += dr
+            if len(out) > 40:
+                break
+        return out
+
     taken = {tuple(n["axial"]) for n in fleet["nodes"] if isinstance(n.get("axial"), list)}
-    spare = [p for p in ring if p not in taken]
+    spare = _spiral(taken)
 
     nodes_out = []
     for n in fleet["nodes"]:

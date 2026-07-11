@@ -8,13 +8,46 @@ struct HoneycombCanvas: View {
     let selectedID: String?
     let onSelect: (String) -> Void
 
-    /// Pixel size of one hex (center to vertex)
-    private let hexSize: CGFloat = 52
-    private let latticeRadius = 3
+    /// Pixel size of one hex (center to vertex) — shrinks so a growing fleet
+    /// always fits the window instead of spilling off-canvas.
+    private func hexSize(for size: CGSize) -> CGFloat {
+        let extent = nodes.reduce(1) { acc, node in
+            max(acc, abs(node.axial.q), abs(node.axial.r), abs(node.axial.q + node.axial.r))
+        }
+        // Width of the layout in hex-size units, plus a hex of margin
+        let unitsWide = CGFloat(extent) * 2.0 * 1.732 + 3.2
+        let unitsTall = CGFloat(extent) * 3.0 + 3.4
+        let fitted = min(size.width / unitsWide, size.height / unitsTall)
+        return max(26, min(52, fitted))
+    }
+
+    private var latticeRadius: Int {
+        let extent = nodes.reduce(1) { acc, node in
+            max(acc, abs(node.axial.q), abs(node.axial.r), abs(node.axial.q + node.axial.r))
+        }
+        return min(5, max(3, extent + 1))
+    }
+
+    /// Offset that centres the *nodes* in the view, not the axial origin —
+    /// otherwise a lopsided fleet drifts to one side.
+    private func clusterOffset(hexSize: CGFloat) -> CGPoint {
+        guard !nodes.isEmpty else { return .zero }
+        let points = nodes.map {
+            axialToPixel(q: $0.axial.q, r: $0.axial.r, size: hexSize, origin: .zero)
+        }
+        let minX = points.map(\.x).min() ?? 0, maxX = points.map(\.x).max() ?? 0
+        let minY = points.map(\.y).min() ?? 0, maxY = points.map(\.y).max() ?? 0
+        return CGPoint(x: -(minX + maxX) / 2, y: -(minY + maxY) / 2)
+    }
 
     var body: some View {
         GeometryReader { geo in
-            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2 - 8)
+            let hexSize = hexSize(for: geo.size)
+            let shift = clusterOffset(hexSize: hexSize)
+            let center = CGPoint(
+                x: geo.size.width / 2 + shift.x,
+                y: geo.size.height / 2 - 8 + shift.y
+            )
 
             ZStack {
                 // Ambient glow
@@ -25,7 +58,7 @@ struct HoneycombCanvas: View {
                     .position(center)
 
                 Canvas { context, size in
-                    drawLattice(context: context, center: center)
+                    drawLattice(context: context, center: center, hexSize: hexSize)
                 }
                 .allowsHitTesting(false)
 
@@ -35,6 +68,7 @@ struct HoneycombCanvas: View {
                         drawEdges(
                             context: context,
                             center: center,
+                            hexSize: hexSize,
                             time: timeline.date.timeIntervalSinceReferenceDate
                         )
                     }
@@ -83,7 +117,7 @@ struct HoneycombCanvas: View {
         nodes.contains { $0.isStreaming }
     }
 
-    private func drawLattice(context: GraphicsContext, center: CGPoint) {
+    private func drawLattice(context: GraphicsContext, center: CGPoint, hexSize: CGFloat) {
         let bgSize = hexSize * 0.92
         for q in -latticeRadius...latticeRadius {
             for r in -latticeRadius...latticeRadius {
@@ -117,7 +151,7 @@ struct HoneycombCanvas: View {
         return pairs
     }
 
-    private func drawEdges(context: GraphicsContext, center: CGPoint, time: TimeInterval) {
+    private func drawEdges(context: GraphicsContext, center: CGPoint, hexSize: CGFloat, time: TimeInterval) {
         let hubID = nodes.first(where: { $0.isHub })?.id
         for (a, b) in edgePairs {
             guard let na = nodes.first(where: { $0.id == a }),
@@ -208,17 +242,17 @@ struct NodeHexView: View {
 
             VStack(spacing: 4) {
                 Text(node.name)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .font(.system(size: max(9, size * 0.23), weight: .bold, design: .monospaced))
                     .foregroundStyle(LabTheme.phosphor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Text(hexSubtitle)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(.system(size: max(7, size * 0.19), weight: .medium, design: .monospaced))
                     .foregroundStyle(hexSubtitleColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .padding(10)
+            .padding(size * 0.18)
         }
         .frame(width: size * 1.7, height: size * 1.7)
         .contentShape(HexShape())

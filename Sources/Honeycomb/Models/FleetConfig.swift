@@ -57,24 +57,74 @@ enum FleetStore {
         var title: String
         var nodes: [LabNode]
         var links: [(String, String)]
+        /// Problems found while loading — surfaced in the UI so a typo in
+        /// fleet.json never silently drops a node.
+        var problems: [String] = []
+    }
+
+    /// Hex ring spiral — unlimited, so a growing fleet never collides at (0,0).
+    private static func spiralPositions(count: Int, skipping used: Set<String>) -> [(Int, Int)] {
+        var out: [(Int, Int)] = []
+        var radius = 1
+        while out.count < count, radius < 12 {
+            // Walk the ring at this radius (pointy-top axial directions)
+            let directions = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)]
+            var q = -radius, r = radius  // start corner
+            for dir in directions {
+                for _ in 0..<radius {
+                    if !used.contains("\(q),\(r)") && !(q == 0 && r == 0) {
+                        out.append((q, r))
+                        if out.count >= count { return out }
+                    }
+                    q += dir.0
+                    r += dir.1
+                }
+            }
+            radius += 1
+        }
+        return out
     }
 
     static func load() -> Fleet {
-        let config = loadConfig()
-        let ringPositions: [(Int, Int)] = [
-            (0, -1), (-1, 0), (1, 0), (0, 1), (-1, 1), (1, -1), (-2, 1), (2, -1),
-        ]
-        var usedPositions = Set(config.nodes.compactMap { n -> String? in
+        let (config, configProblems) = loadConfig()
+        var problems = configProblems
+
+        // Cells claimed by explicit axial values — the auto-placer must avoid
+        // them even for nodes it hasn't reached yet.
+        let reserved = Set(config.nodes.compactMap { n -> String? in
             guard let a = n.axial, a.count == 2 else { return nil }
             return "\(a[0]),\(a[1])"
         })
-        var ring = ringPositions.filter { !usedPositions.contains("\($0.0),\($0.1)") }
+        // Cells actually handed out so far — this is what a collision means.
+        var assigned = Set<String>()
+        let needsPosition = config.nodes.filter { ($0.axial?.count ?? 0) != 2 }.count
+        var ring = spiralPositions(count: needsPosition, skipping: reserved)
 
+        var seenIDs = Set<String>()
         let nodes: [LabNode] = config.nodes.compactMap { n in
-            guard let base = URL(string: n.baseURL),
-                  let probe = ProbeKind(rawValue: n.probe)
-            else { return nil }
-            let axial: (Int, Int)
+            guard !n.id.isEmpty else {
+                problems.append("a node has no id — skipped")
+                return nil
+            }
+            guard !seenIDs.contains(n.id) else {
+                problems.append("duplicate node id “\(n.id)” — only the first is used")
+                return nil
+            }
+            guard let base = URL(string: n.baseURL), base.scheme != nil else {
+                problems.append("“\(n.id)”: baseURL “\(n.baseURL)” is not a valid URL — skipped")
+                return nil
+            }
+            guard let probe = ProbeKind(rawValue: n.probe) else {
+                let valid = ["vllm-ssh", "lmstudio-hub", "lmlink-peer", "http-only"]
+                problems.append("“\(n.id)”: unknown probe “\(n.probe)” (use \(valid.joined(separator: ", "))) — skipped")
+                return nil
+            }
+            if probe == .vllmSSH && n.sshHost == nil {
+                problems.append("“\(n.id)”: probe vllm-ssh without sshHost — health falls back to HTTP only")
+            }
+            seenIDs.insert(n.id)
+
+            var axial: (Int, Int)
             if let a = n.axial, a.count == 2 {
                 axial = (a[0], a[1])
             } else if !ring.isEmpty {
@@ -82,7 +132,15 @@ enum FleetStore {
             } else {
                 axial = (0, 0)
             }
-            usedPositions.insert("\(axial.0),\(axial.1)")
+            // Never stack two hexes on the same cell — the lower one would be
+            // untappable and invisible.
+            if assigned.contains("\(axial.0),\(axial.1)") {
+                let taken = axial
+                let free = spiralPositions(count: 1, skipping: assigned.union(reserved))
+                if let spot = free.first { axial = spot }
+                problems.append("“\(n.id)”: axial [\(taken.0), \(taken.1)] already used — moved to [\(axial.0), \(axial.1)]")
+            }
+            assigned.insert("\(axial.0),\(axial.1)")
             return LabNode(
                 id: n.id,
                 name: n.name,
@@ -112,34 +170,85 @@ enum FleetStore {
             .filter { $0.count == 2 && ids.contains($0[0]) && ids.contains($0[1]) }
             .map { ($0[0], $0[1]) }
 
-        return Fleet(title: config.title ?? "HONEYCOMB", nodes: nodes, links: links)
+        return Fleet(
+            title: config.title ?? "HONEYCOMB",
+            nodes: nodes,
+            links: links,
+            problems: problems
+        )
     }
 
-    private static func loadConfig() -> FleetConfig {
-        // 1. Explicit override (also how tests point at alternate fleets)
-        if let path = ProcessInfo.processInfo.environment["HONEYCOMB_FLEET"],
-           let config = read(URL(fileURLWithPath: path)) {
-            return config
+    static var fleetFileURL: URL {
+        if let path = ProcessInfo.processInfo.environment["HONEYCOMB_FLEET"] {
+            return URL(fileURLWithPath: path)
         }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Honeycomb", isDirectory: true)
+            .appendingPathComponent("fleet.json")
+    }
+
+    private static func loadConfig() -> (FleetConfig, [String]) {
+        var problems: [String] = []
+
+        // 1. Explicit override (also how tests point at alternate fleets)
+        if let path = ProcessInfo.processInfo.environment["HONEYCOMB_FLEET"] {
+            switch read(URL(fileURLWithPath: path)) {
+            case .success(let config):
+                return (config, problems)
+            case .failure(let why):
+                problems.append("HONEYCOMB_FLEET=\(path): \(why.message)")
+                return (FleetConfig(title: "HONEYCOMB", nodes: [], links: nil), problems)
+            }
+        }
+
         // 2. User's fleet in Application Support
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Honeycomb", isDirectory: true)
         let userFile = dir.appendingPathComponent("fleet.json")
-        if let config = read(userFile) {
-            return config
+        if FileManager.default.fileExists(atPath: userFile.path) {
+            switch read(userFile) {
+            case .success(let config):
+                return (config, problems)
+            case .failure(let why):
+                // A broken fleet.json must never be silently replaced by the
+                // default — the user would lose their edits and never know.
+                problems.append("fleet.json could not be read: \(why.message)")
+                return (FleetConfig(title: "HONEYCOMB", nodes: [], links: nil), problems)
+            }
         }
-        // 3. Bundled default — copy it out so the user can edit it
+
+        // 3. First run — copy the bundled default out so the user can edit it
         if let bundled = Bundle.module.url(forResource: "fleet-default", withExtension: "json"),
-           let config = read(bundled) {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try? FileManager.default.copyItem(at: bundled, to: userFile)
-            return config
+           case .success(let config) = read(bundled) {
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: bundled, to: userFile)
+            } catch {
+                problems.append("could not write \(userFile.path): \(error.localizedDescription)")
+            }
+            return (config, problems)
         }
-        return FleetConfig(title: "HONEYCOMB", nodes: [], links: nil)
+        return (FleetConfig(title: "HONEYCOMB", nodes: [], links: nil), problems)
     }
 
-    private static func read(_ url: URL) -> FleetConfig? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(FleetConfig.self, from: data)
+    /// Human-readable load failure.
+    private struct LoadError: Error { var message: String }
+
+    private static func read(_ url: URL) -> Result<FleetConfig, LoadError> {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            return .failure(LoadError(message: error.localizedDescription))
+        }
+        do {
+            return .success(try JSONDecoder().decode(FleetConfig.self, from: data))
+        } catch let DecodingError.keyNotFound(key, ctx) {
+            return .failure(LoadError(message: "missing required field “\(key.stringValue)” \(ctx.codingPath.map(\.stringValue).joined(separator: "."))"))
+        } catch let DecodingError.dataCorrupted(ctx) {
+            return .failure(LoadError(message: "invalid JSON — \(ctx.debugDescription)"))
+        } catch {
+            return .failure(LoadError(message: error.localizedDescription))
+        }
     }
 }

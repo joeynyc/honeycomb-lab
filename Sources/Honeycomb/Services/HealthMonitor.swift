@@ -567,7 +567,10 @@ final class HealthMonitor {
         node: LabNode,
         session: URLSession
     ) async -> (kvCachePct: Double?, running: Int?, genTotal: Double?) {
-        guard let url = URL(string: node.baseURL.absoluteString + "/metrics") else {
+        // Trim a trailing slash — "http://host:8000/" + "/metrics" would 404
+        // and silently blank the metrics bars.
+        let base = node.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: base + "/metrics") else {
             return (nil, nil, nil)
         }
         var request = URLRequest(url: url)

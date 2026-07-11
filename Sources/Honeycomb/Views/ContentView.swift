@@ -29,6 +29,11 @@ struct ContentView: View {
                                 emptyFleetHint
                             }
                         }
+                        .overlay(alignment: .bottomLeading) {
+                            if !monitor.fleet.problems.isEmpty {
+                                fleetProblems
+                            }
+                        }
 
                         if showFeed {
                             TrafficFeed(feed: monitor.feed)
@@ -60,6 +65,36 @@ struct ContentView: View {
         }
         .frame(minWidth: 960, minHeight: 620)
         .preferredColorScheme(.dark)
+    }
+
+    /// Config problems (bad probe kind, duplicate id, unreadable file…) must
+    /// never be silent — a dropped node would otherwise just not appear.
+    private var fleetProblems: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("FLEET.JSON · \(monitor.fleet.problems.count) ISSUE\(monitor.fleet.problems.count == 1 ? "" : "S")")
+                .font(LabTheme.monoTiny)
+                .tracking(1)
+                .foregroundStyle(LabTheme.amber)
+            ForEach(monitor.fleet.problems.prefix(4), id: \.self) { problem in
+                Text("· \(problem)")
+                    .font(LabTheme.monoTiny)
+                    .foregroundStyle(LabTheme.textMuted)
+                    .lineLimit(2)
+            }
+            if monitor.fleet.problems.count > 4 {
+                Text("+ \(monitor.fleet.problems.count - 4) more")
+                    .font(LabTheme.monoTiny)
+                    .foregroundStyle(LabTheme.dim)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: 420, alignment: .leading)
+        .background(LabTheme.panel.opacity(0.95))
+        .overlay(
+            RoundedRectangle(cornerRadius: 3)
+                .stroke(LabTheme.amberDim, lineWidth: 1)
+        )
+        .padding(10)
     }
 
     /// First-run guidance when fleet.json is missing, empty, or malformed.
