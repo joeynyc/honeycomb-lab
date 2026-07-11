@@ -1,0 +1,5 @@
+.build/
+Honeycomb.app/
+.DS_Store
+*.log
+__pycache__/

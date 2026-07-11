@@ -1,0 +1,29 @@
+{
+  "listen_host": "0.0.0.0",
+  "listen_port": 4000,
+  "default_model": "spark-peer",
+  "backends": {
+    "gx10": {
+      "name": "gx10 (peer Spark)",
+      "base_url": "http://192.168.1.192:8000/v1",
+      "kind": "vllm"
+    },
+    "joeydgx": {
+      "name": "JoeyDGX (main Spark)",
+      "base_url": "http://192.168.1.15:8000/v1",
+      "kind": "vllm"
+    },
+    "lms": {
+      "name": "LM Studio (Mini + LM Link)",
+      "base_url": "http://127.0.0.1:1234/v1",
+      "kind": "lmstudio"
+    }
+  },
+  "aliases": {
+    "spark-peer": { "backend": "gx10", "upstream_model": null },
+    "spark-main": { "backend": "joeydgx", "upstream_model": null },
+    "pc-4080": { "backend": "lms", "upstream_model": null },
+    "local-lms": { "backend": "lms", "upstream_model": null },
+    "default": { "backend": "gx10", "upstream_model": null }
+  }
+}
