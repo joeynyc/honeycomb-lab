@@ -33,6 +33,7 @@ struct ContentView: View {
                     // Inspector only — full height, no chat
                     NodeInspector(
                         node: monitor.selectedNode,
+                        history: monitor.history,
                         onRefresh: {
                             Task { await monitor.refreshAll() }
                         },

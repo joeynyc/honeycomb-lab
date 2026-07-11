@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NodeInspector: View {
     let node: LabNode?
+    var history: HealthHistory?
     let onRefresh: () -> Void
     let onSSH: () -> Void
     @State private var ping = PingService()
@@ -118,6 +119,20 @@ struct NodeInspector: View {
             if let t = node.lastChecked {
                 row("CHECKED", t.formatted(date: .omitted, time: .standard))
             }
+            if let changed = history?.lastChange[node.id] {
+                row("CHANGED", changed.formatted(.relative(presentation: .named)))
+            }
+            if let series = history?.latencySeries(nodeID: node.id),
+               series.count > 4, series.contains(where: { $0 > 0 }) {
+                HStack(alignment: .center, spacing: 8) {
+                    Text("TREND")
+                        .font(LabTheme.monoTiny)
+                        .foregroundStyle(LabTheme.textMuted)
+                        .frame(width: 64, alignment: .leading)
+                    Sparkline(values: series)
+                        .frame(height: 18)
+                }
+            }
 
             Text(node.id == "mini" || node.id == "pc4080" ? "LOADED MODELS" : "SERVING MODELS")
                 .font(LabTheme.monoTiny)
@@ -223,6 +238,27 @@ struct NodeInspector: View {
                 .font(LabTheme.monoSmall)
                 .foregroundStyle(LabTheme.text)
                 .textSelection(.enabled)
+        }
+    }
+
+    /// Tiny latency trend line over the last hour of polls.
+    private struct Sparkline: View {
+        let values: [Double]
+
+        var body: some View {
+            Canvas { context, size in
+                guard values.count > 1 else { return }
+                let maxV = max(values.max() ?? 1, 1)
+                let stepX = size.width / CGFloat(values.count - 1)
+                var path = Path()
+                for (i, v) in values.enumerated() {
+                    let x = CGFloat(i) * stepX
+                    let y = size.height - (CGFloat(v / maxV) * (size.height - 2)) - 1
+                    if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                    else { path.addLine(to: CGPoint(x: x, y: y)) }
+                }
+                context.stroke(path, with: .color(LabTheme.phosphorDim), lineWidth: 1)
+            }
         }
     }
 

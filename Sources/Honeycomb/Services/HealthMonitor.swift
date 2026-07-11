@@ -17,6 +17,8 @@ final class HealthMonitor {
     private var pollTask: Task<Void, Never>?
     /// Last seen vLLM generation-token counter per node, for tok/s deltas
     private var lastGenTokens: [String: (Date, Double)] = [:]
+    /// Rolling health/latency history + state-change notifications
+    let history = HealthHistory()
     private let session: URLSession
     private let pollInterval: Duration
     private let gatewayURL = URL(string: "http://127.0.0.1:4000/health")!
@@ -98,6 +100,12 @@ final class HealthMonitor {
             nodes[idx].statusDetail = result.detail
             nodes[idx].lastChecked = Date()
             nodes[idx].metrics = computeTokRate(id: id, metrics: result.metrics)
+            history.record(
+                nodeID: id,
+                nodeName: nodes[idx].name,
+                health: result.health,
+                latencyMs: result.latencyMs
+            )
             // Lit = gateway saw traffic to this node recently
             nodes[idx].isStreaming = gateway.nodeActivity[id] ?? false
         }
