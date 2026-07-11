@@ -1,9 +1,11 @@
 import Foundation
+import Observation
 import UserNotifications
 
 /// Rolling per-node health/latency history with small-JSON persistence,
 /// plus macOS notifications on node state changes.
 @MainActor
+@Observable
 final class HealthHistory {
     struct Sample: Codable, Equatable, Sendable {
         var ts: Date
@@ -20,11 +22,21 @@ final class HealthHistory {
     private var lastSave = Date.distantPast
     private var notificationsReady = false
 
+    /// Non-fatal persistence failure (disk full, permissions) — surfaced so a
+    /// silently non-persisting history is debuggable instead of invisible.
+    private(set) var storageError: String?
+
     init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Honeycomb", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("history.json")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            let message = "history not saved: \(error.localizedDescription)"
+            storageError = message
+            FileHandle.standardError.write(Data("[Honeycomb] \(message)\n".utf8))
+        }
         load()
 
         // UNUserNotificationCenter needs a real app bundle; guard so a bare
@@ -103,6 +115,15 @@ final class HealthHistory {
     private func save() {
         let snap = Snapshot(samples: samples, lastChange: lastChange)
         guard let data = try? JSONEncoder().encode(snap) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            storageError = nil
+        } catch {
+            let message = "history not saved: \(error.localizedDescription)"
+            if storageError != message {
+                storageError = message
+                FileHandle.standardError.write(Data("[Honeycomb] \(message)\n".utf8))
+            }
+        }
     }
 }

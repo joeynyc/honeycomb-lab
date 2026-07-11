@@ -30,8 +30,10 @@ struct ContentView: View {
                             }
                         }
                         .overlay(alignment: .bottomLeading) {
-                            if !monitor.fleet.problems.isEmpty {
-                                fleetProblems
+                            let issues = monitor.fleet.problems
+                                + [monitor.history.storageError].compactMap { $0 }
+                            if !issues.isEmpty {
+                                problemPanel(issues)
                             }
                         }
 
@@ -67,22 +69,22 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
     }
 
-    /// Config problems (bad probe kind, duplicate id, unreadable file…) must
-    /// never be silent — a dropped node would otherwise just not appear.
-    private var fleetProblems: some View {
+    /// Config and storage problems must never be silent — a dropped node or a
+    /// history that never persists would otherwise just look like nothing.
+    private func problemPanel(_ issues: [String]) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("FLEET.JSON · \(monitor.fleet.problems.count) ISSUE\(monitor.fleet.problems.count == 1 ? "" : "S")")
+            Text("CONFIG · \(issues.count) ISSUE\(issues.count == 1 ? "" : "S")")
                 .font(LabTheme.monoTiny)
                 .tracking(1)
                 .foregroundStyle(LabTheme.amber)
-            ForEach(monitor.fleet.problems.prefix(4), id: \.self) { problem in
+            ForEach(issues.prefix(4), id: \.self) { problem in
                 Text("· \(problem)")
                     .font(LabTheme.monoTiny)
                     .foregroundStyle(LabTheme.textMuted)
                     .lineLimit(2)
             }
-            if monitor.fleet.problems.count > 4 {
-                Text("+ \(monitor.fleet.problems.count - 4) more")
+            if issues.count > 4 {
+                Text("+ \(issues.count - 4) more")
                     .font(LabTheme.monoTiny)
                     .foregroundStyle(LabTheme.dim)
             }
