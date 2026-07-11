@@ -728,7 +728,7 @@ final class HealthMonitor {
 
     private nonisolated static func lmsOutput(_ args: [String], cacheKey: String) async -> String {
         let result = await SubprocessCache.shared.value(key: cacheKey, ttl: 15) {
-            await Subprocess.run(lmsPath, args, timeout: 8)
+            await Subprocess.run(lmsPath, args, timeout: 8, mergeStderr: true)
         }
         return result?.output ?? ""
     }

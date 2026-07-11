@@ -9,17 +9,21 @@ enum Subprocess {
         var output: String
     }
 
+    /// mergeStderr: some CLIs (lms link status) write human output to stderr
+    /// when not attached to a TTY — merge both streams into one pipe so
+    /// parsing sees it either way.
     static func run(
         _ path: String,
         _ args: [String],
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        mergeStderr: Bool = false
     ) async -> Result? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
         let out = Pipe()
         process.standardOutput = out
-        process.standardError = FileHandle.nullDevice
+        process.standardError = mergeStderr ? out : FileHandle.nullDevice
 
         let exitStream = AsyncStream<Void> { continuation in
             process.terminationHandler = { _ in

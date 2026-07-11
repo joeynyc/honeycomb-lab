@@ -50,12 +50,18 @@ def _lms_path() -> str | None:
     return shutil.which("lms")
 
 
-def _run(cmd: list[str], timeout: float) -> tuple[int, str]:
+def _run(cmd: list[str], timeout: float, merge_stderr: bool = False) -> tuple[int, str]:
+    """merge_stderr: the lms CLI writes some subcommands' human output to
+    stderr when not attached to a TTY (link status does, ps doesn't) — merge
+    so parsing sees it either way."""
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, check=False
         )
-        return proc.returncode, proc.stdout
+        out = proc.stdout
+        if merge_stderr:
+            out = out + "\n" + proc.stderr
+        return proc.returncode, out
     except Exception:
         return -1, ""
 
@@ -202,27 +208,33 @@ def _probe_lmlink_peer(node: dict[str, Any]) -> dict[str, Any]:
     link_ok = False
     loaded: list[str] = []
     if lms:
-        code, out = _run([lms, "link", "status"], timeout=8)
+        code, out = _run([lms, "link", "status"], timeout=8, merge_stderr=True)
         if code == 0:
             low = out.lower()
             link_ok = peer.lower() in low and ("connected" in low or "online" in low)
-        code, out = _run([lms, "ps"], timeout=8)
+        code, out = _run([lms, "ps"], timeout=8, merge_stderr=True)
         if code == 0:
             for line in out.splitlines():
                 if peer.lower() in line.lower():
                     token = line.strip().split()
                     if token and len(token[0]) > 2:
                         loaded.append(token[0])
-    health = "online" if link_ok else "offline"
+    ssh_ok = False
+    host = node.get("sshHost")
+    if not link_ok and host:
+        code, _ = _run(["ssh", *SSH_OPTS, host, "echo", "ok"], timeout=6)
+        ssh_ok = code == 0
+    host_up = link_ok or ssh_ok
+    health = "online" if host_up else "offline"
+    detail = f"lm-link · {peer}" if link_ok else ("ssh only · link down" if ssh_ok else f"{peer} not in link mesh")
     return {
         "health": health,
         "models": loaded,
         "inferenceOK": link_ok,
-        "detail": (f"lm-link · {peer}" if link_ok else f"{peer} not in link mesh")
-        + (f" · {len(loaded)} loaded" if loaded else ""),
+        "detail": detail + (f" · {len(loaded)} loaded" if loaded else ""),
         "latencyMs": None,
         "metrics": None,
-        "pathBadge": "LM LINK" if link_ok else "DOWN",
+        "pathBadge": "LM LINK" if link_ok else ("SSH" if ssh_ok else "DOWN"),
     }
 
 
