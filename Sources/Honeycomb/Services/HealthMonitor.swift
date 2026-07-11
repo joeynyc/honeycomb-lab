@@ -19,6 +19,8 @@ final class HealthMonitor {
     private var lastGenTokens: [String: (Date, Double)] = [:]
     /// Rolling health/latency history + state-change notifications
     let history = HealthHistory()
+    /// Remote start/stop of inference containers
+    let control = NodeControl()
     private let session: URLSession
     private let pollInterval: Duration
     private let gatewayURL = URL(string: "http://127.0.0.1:4000/health")!
@@ -491,8 +493,8 @@ final class HealthMonitor {
     private nonisolated static func fetchHardwareMetrics(host: String) async -> NodeMetrics? {
         let cmd = "free -m | awk '/^Mem:/{print $3, $2}'; "
             + "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits"
-        let result = await CommandCache.shared.value(key: "hw:\(host)", ttl: 8) {
-            await runCommand(
+        let result = await SubprocessCache.shared.value(key: "hw:\(host)", ttl: 8) {
+            await Subprocess.run(
                 "/usr/bin/ssh",
                 ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, cmd],
                 timeout: 6
@@ -666,13 +668,7 @@ final class HealthMonitor {
         )
     }
 
-    // MARK: - Subprocess plumbing
-
-    /// Result of a completed subprocess.
-    private struct CommandResult: Sendable {
-        var status: Int32
-        var output: String
-    }
+    // MARK: - Subprocess helpers (shared runner lives in Subprocess.swift)
 
     /// `lms` CLI location — invoked directly, never via a login shell.
     private nonisolated static let lmsPath: String = {
@@ -686,97 +682,9 @@ final class HealthMonitor {
             ?? "/usr/bin/false"
     }()
 
-    /// Run a command with a hard timeout. Returns nil on launch failure or
-    /// timeout (the child is SIGKILLed). stderr is discarded and stdout is
-    /// drained concurrently, so the child can never block on a full pipe and
-    /// no thread ever parks in waitUntilExit.
-    private nonisolated static func runCommand(
-        _ path: String,
-        _ args: [String],
-        timeout: TimeInterval
-    ) async -> CommandResult? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = FileHandle.nullDevice
-
-        let exitStream = AsyncStream<Void> { continuation in
-            process.terminationHandler = { _ in
-                continuation.yield(())
-                continuation.finish()
-            }
-        }
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        // Drain stdout off the exit-wait path.
-        let reader = Task.detached(priority: .utility) {
-            (try? out.fileHandleForReading.readToEnd()) ?? Data()
-        }
-
-        let exited = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                for await _ in exitStream { break }
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(timeout))
-                return false
-            }
-            let first = await group.next() ?? false
-            if !first {
-                kill(process.processIdentifier, SIGKILL)
-            }
-            group.cancelAll()
-            return first
-        }
-
-        let data = await reader.value
-        guard exited else { return nil }
-        return CommandResult(
-            status: process.terminationStatus,
-            output: String(data: data, encoding: .utf8) ?? ""
-        )
-    }
-
-    /// Subprocess probes are expensive (a fork per call) and their answers
-    /// change slowly — cache per command line and collapse concurrent callers,
-    /// so e.g. the mini and PC probes asking for `lms ps` in the same tick
-    /// share one child process.
-    private actor CommandCache {
-        static let shared = CommandCache()
-        private var entries: [String: (Date, CommandResult?)] = [:]
-        private var inFlight: [String: Task<CommandResult?, Never>] = [:]
-
-        func value(
-            key: String,
-            ttl: TimeInterval,
-            compute: @Sendable @escaping () async -> CommandResult?
-        ) async -> CommandResult? {
-            if let (stamp, cached) = entries[key], Date().timeIntervalSince(stamp) < ttl {
-                return cached
-            }
-            if let running = inFlight[key] {
-                return await running.value
-            }
-            let task = Task { await compute() }
-            inFlight[key] = task
-            let result = await task.value
-            entries[key] = (Date(), result)
-            inFlight[key] = nil
-            return result
-        }
-    }
-
     private nonisolated static func lmsOutput(_ args: [String], cacheKey: String) async -> String {
-        let result = await CommandCache.shared.value(key: cacheKey, ttl: 15) {
-            await runCommand(lmsPath, args, timeout: 8)
+        let result = await SubprocessCache.shared.value(key: cacheKey, ttl: 15) {
+            await Subprocess.run(lmsPath, args, timeout: 8)
         }
         return result?.output ?? ""
     }
@@ -784,8 +692,8 @@ final class HealthMonitor {
     // MARK: - Checks
 
     private nonisolated static func checkSSH(host: String) async -> (Bool, String?) {
-        let result = await CommandCache.shared.value(key: "ssh:\(host)", ttl: 10) {
-            await runCommand(
+        let result = await SubprocessCache.shared.value(key: "ssh:\(host)", ttl: 10) {
+            await Subprocess.run(
                 "/usr/bin/ssh",
                 [
                     "-o", "BatchMode=yes",

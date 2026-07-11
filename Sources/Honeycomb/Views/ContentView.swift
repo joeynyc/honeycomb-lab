@@ -34,6 +34,7 @@ struct ContentView: View {
                     NodeInspector(
                         node: monitor.selectedNode,
                         history: monitor.history,
+                        control: monitor.control,
                         onRefresh: {
                             Task { await monitor.refreshAll() }
                         },

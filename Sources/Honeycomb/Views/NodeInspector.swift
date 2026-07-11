@@ -3,9 +3,11 @@ import SwiftUI
 struct NodeInspector: View {
     let node: LabNode?
     var history: HealthHistory?
+    var control: NodeControl?
     let onRefresh: () -> Void
     let onSSH: () -> Void
     @State private var ping = PingService()
+    @State private var pendingAction: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -190,6 +192,50 @@ struct NodeInspector: View {
                     .buttonStyle(.plain)
                     .disabled(ping.isPinging)
                 }
+                if let control, let target = control.target(for: node) {
+                    let busy = control.busyNodeID == node.id
+                    if node.inferenceOK {
+                        Button {
+                            pendingAction = "stop"
+                        } label: {
+                            labelChip(busy ? "…" : "STOP", tint: LabTheme.alert)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(busy)
+                    } else {
+                        Button {
+                            pendingAction = "start"
+                        } label: {
+                            labelChip(busy ? "…" : "SERVE")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(busy)
+                    }
+                    Spacer()
+                        .frame(width: 0)
+                        .confirmationDialog(
+                            "\(pendingAction?.uppercased() ?? "") \(target.container) on \(node.name)?",
+                            isPresented: Binding(
+                                get: { pendingAction != nil },
+                                set: { if !$0 { pendingAction = nil } }
+                            ),
+                            titleVisibility: .visible
+                        ) {
+                            Button(pendingAction == "stop" ? "Stop container" : "Start container") {
+                                let action = pendingAction
+                                pendingAction = nil
+                                Task {
+                                    if action == "stop" {
+                                        await control.stop(node)
+                                    } else {
+                                        await control.start(node)
+                                    }
+                                    onRefresh()
+                                }
+                            }
+                            Button("Cancel", role: .cancel) { pendingAction = nil }
+                        }
+                }
             }
             .padding(.top, 8)
 
@@ -197,9 +243,14 @@ struct NodeInspector: View {
                 row("PING", r.summary)
                     .foregroundStyle(r.isError ? LabTheme.alert : LabTheme.text)
             }
+            if let r = control?.lastResult, r.nodeID == node.id {
+                row("CTRL", r.message)
+                    .foregroundStyle(r.isError ? LabTheme.alert : LabTheme.text)
+            }
         }
         .onChange(of: node.id) { _, _ in
             ping.clear()
+            pendingAction = nil
         }
     }
 
@@ -262,16 +313,16 @@ struct NodeInspector: View {
         }
     }
 
-    private func labelChip(_ title: String) -> some View {
+    private func labelChip(_ title: String, tint: Color = LabTheme.phosphor) -> some View {
         Text(title)
             .font(LabTheme.monoTiny)
             .tracking(1)
-            .foregroundStyle(LabTheme.phosphor)
+            .foregroundStyle(tint)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .overlay(
                 RoundedRectangle(cornerRadius: 2)
-                    .stroke(LabTheme.phosphor.opacity(0.5), lineWidth: 1)
+                    .stroke(tint.opacity(0.5), lineWidth: 1)
             )
     }
 }
