@@ -4,6 +4,7 @@ struct NodeInspector: View {
     let node: LabNode?
     let onRefresh: () -> Void
     let onSSH: () -> Void
+    @State private var ping = PingService()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -144,8 +145,25 @@ struct NodeInspector: View {
                         labelChip("OPEN API")
                     }
                 }
+                if PingService.aliases[node.id] != nil {
+                    Button {
+                        Task { await ping.ping(node: node) }
+                    } label: {
+                        labelChip(ping.isPinging ? "PING…" : "PING")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(ping.isPinging)
+                }
             }
             .padding(.top, 8)
+
+            if let r = ping.result, r.nodeID == node.id {
+                row("PING", r.summary)
+                    .foregroundStyle(r.isError ? LabTheme.alert : LabTheme.text)
+            }
+        }
+        .onChange(of: node.id) { _, _ in
+            ping.clear()
         }
     }
 
