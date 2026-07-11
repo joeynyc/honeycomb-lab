@@ -134,6 +134,17 @@ if [[ -f "$ICON_TARGET" ]]; then
   cp "$ICON_TARGET" "$APP/Contents/Resources/AppIcon.icns"
 fi
 
+# Bundle the gateway so the .app is self-sufficient — a downloaded app can
+# start its own backend without the user cloning the repo.
+GATEWAY_SRC="$ROOT/gateway"
+if [[ -d "$GATEWAY_SRC" ]]; then
+  mkdir -p "$APP/Contents/Resources/gateway"
+  for f in server.py nodes.py dashboard.html config.example.json start.sh README.md; do
+    [[ -f "$GATEWAY_SRC/$f" ]] && cp "$GATEWAY_SRC/$f" "$APP/Contents/Resources/gateway/"
+  done
+  chmod +x "$APP/Contents/Resources/gateway/start.sh" 2>/dev/null || true
+fi
+
 # Ensure contents are writable before stripping attributes and signing.
 chmod -R u+w "$APP"
 

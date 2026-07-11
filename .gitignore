@@ -5,3 +5,4 @@ gateway/stats.json
 *.log
 __pycache__/
 gateway/config.json
+dist/

@@ -46,26 +46,46 @@ browser.
 The hub is the Mac that runs the gateway and the app. Everything the
 system believes about your fleet lives in one file: `fleet.json`.
 
-## Quickstart
+## Install
 
-Requirements: macOS 14+ on the hub (Swift 6 toolchain for the app),
-Python 3.11+, SSH keys to your GPU boxes. Optional per feature: vLLM on
-the GPU boxes, LM Studio + LM Link, Docker (for SERVE/STOP),
-spark-doctor (for DOCTOR).
+### Download the app (no build tools needed)
+
+Grab `Honeycomb-<version>-macos-universal.zip` from Releases, unzip, and
+drag **Honeycomb.app** to `/Applications`. The app is universal (Apple
+Silicon + Intel) and **carries the gateway inside it** — if the gateway
+isn't running, the map offers a **START GATEWAY** button.
+
+> **First launch:** the app is signed ad-hoc, not notarized (that needs a
+> paid Apple Developer ID). macOS will refuse a plain double-click.
+> **Right-click the app → Open → Open** once; after that it launches
+> normally. Everything it runs is in this repo — read it before you trust it.
+
+Requirements: macOS 14+, `python3` (from Xcode Command Line Tools:
+`xcode-select --install`), and SSH keys to your GPU boxes. Optional per
+feature: vLLM on the boxes, LM Studio + LM Link, Docker (SERVE/STOP),
+[spark-doctor](https://github.com/joeynyc/spark-doctor) (DOCTOR).
+
+Then describe your machines — the app shows the exact path, and names any
+mistake it finds:
+
+- **fleet.json** → `~/Library/Application Support/Honeycomb/fleet.json`
+  (see [fleet.example.json](fleet.example.json))
+- **gateway config** → `~/Library/Application Support/Honeycomb/gateway-config.json`
+  (seeded from the example on first start; set a `control_token`)
+
+The web dashboard is then live at `http://<hub-ip>:4000` for any browser,
+iPad, or phone.
+
+### Build from source
 
 ```bash
 git clone <this repo> && cd honeycomb-lab
+cp gateway/config.example.json gateway/config.json   # edit backends + token
+(cd gateway && ./start.sh)                           # → http://0.0.0.0:4000
+./Scripts/compile_and_run.sh                         # build + package + launch
+cp -R Honeycomb.app /Applications/
 
-# 1. Gateway: describe your backends
-cp gateway/config.example.json gateway/config.json   # edit IPs/aliases
-cd gateway && ./start.sh                             # → http://0.0.0.0:4000
-
-# 2. App (first launch copies the bundled fleet to
-#    ~/Library/Application Support/Honeycomb/fleet.json — edit it there)
-./Scripts/compile_and_run.sh          # builds + packages + launches
-cp -R Honeycomb.app /Applications/    # keep a real install
-
-# 3. Web dashboard — already live: open http://<hub-ip>:4000 in a browser
+./Scripts/make_release.sh    # universal .zip in dist/, for distribution
 ```
 
 To run the gateway as a service (start at login, restart on crash), see [docs/launchd.md](docs/launchd.md).

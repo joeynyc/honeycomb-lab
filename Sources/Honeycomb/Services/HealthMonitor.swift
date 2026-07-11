@@ -23,6 +23,8 @@ final class HealthMonitor {
     let control = NodeControl()
     /// spark-doctor diagnostics for nodes that configure a doctorCommand
     let doctor = DoctorService()
+    /// Starts the gateway bundled inside the .app when it isn't running
+    let launcher = GatewayLauncher()
     private let session: URLSession
     private let pollInterval: Duration
     private let gatewayURL = URL(string: "http://127.0.0.1:4000/health")!

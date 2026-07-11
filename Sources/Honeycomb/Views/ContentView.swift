@@ -25,7 +25,9 @@ struct ContentView: View {
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .overlay {
-                            if monitor.nodes.isEmpty {
+                            if !monitor.gatewayOK {
+                                gatewayDownHint
+                            } else if monitor.nodes.isEmpty {
                                 emptyFleetHint
                             }
                         }
@@ -97,6 +99,60 @@ struct ContentView: View {
                 .stroke(LabTheme.amberDim, lineWidth: 1)
         )
         .padding(10)
+    }
+
+    /// The gateway is the engine — if it's down, nothing else is meaningful.
+    /// A downloaded .app can start its own bundled copy right here.
+    private var gatewayDownHint: some View {
+        VStack(spacing: 10) {
+            Text("GATEWAY NOT RUNNING")
+                .font(LabTheme.monoSmall.weight(.bold))
+                .tracking(2)
+                .foregroundStyle(LabTheme.alert)
+            Text("The map and node control need the gateway on :4000.")
+                .font(LabTheme.monoSmall)
+                .foregroundStyle(LabTheme.textMuted)
+
+            if monitor.launcher.canStart {
+                Button {
+                    Task {
+                        await monitor.launcher.start()
+                        await monitor.refreshAll()
+                    }
+                } label: {
+                    Text(monitor.launcher.isStarting ? "STARTING…" : "START GATEWAY")
+                        .font(LabTheme.monoTiny)
+                        .tracking(1)
+                        .foregroundStyle(LabTheme.bg)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(LabTheme.phosphor)
+                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                }
+                .buttonStyle(.plain)
+                .disabled(monitor.launcher.isStarting)
+            } else if let reason = monitor.launcher.blockedReason {
+                Text(reason)
+                    .font(LabTheme.monoTiny)
+                    .foregroundStyle(LabTheme.amber)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
+
+            if let err = monitor.launcher.lastError {
+                Text(err)
+                    .font(LabTheme.monoTiny)
+                    .foregroundStyle(LabTheme.alert)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
+        }
+        .padding(24)
+        .background(LabTheme.panel.opacity(0.96))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(LabTheme.stroke, lineWidth: 1)
+        )
     }
 
     /// First-run guidance when fleet.json is missing, empty, or malformed.
