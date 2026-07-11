@@ -2,6 +2,7 @@
   "listen_host": "0.0.0.0",
   "listen_port": 4000,
   "default_model": "spark-peer",
+  "cheap_order": ["lms", "gx10", "joeydgx"],
   "backends": {
     "gx10": {
       "name": "gx10 (peer Spark)",

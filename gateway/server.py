@@ -38,6 +38,11 @@ CFG = load_config()
 BACKENDS: dict[str, dict[str, Any]] = CFG["backends"]
 ALIASES: dict[str, dict[str, Any]] = CFG.get("aliases", {})
 DEFAULT_MODEL = CFG.get("default_model", "spark-peer")
+# Cheapest-first backend order for the dynamic "cheap" alias — small local
+# model on the Mini before waking a Spark-class GPU.
+CHEAP_ORDER: list[str] = [
+    b for b in CFG.get("cheap_order", ["lms", "gx10", "joeydgx"]) if b in BACKENDS
+]
 
 # Live traffic for Honeycomb "lit" hexes (thread-safe)
 _activity_lock = threading.Lock()
@@ -197,8 +202,25 @@ def all_backend_status() -> dict[str, tuple[bool, list[str], float | None]]:
     return {bid: f.result() for bid, f in futures.items()}
 
 
+def resolve_cheap() -> tuple[str, str, str | None] | None:
+    """First backend in CHEAP_ORDER that is healthy with a chat model loaded."""
+    for bid in CHEAP_ORDER:
+        ok, models, _ = backend_status(bid)
+        chat = [m for m in models if "embed" not in m.lower()]
+        if ok and chat:
+            return bid, chat[0], "cheap"
+    return None
+
+
 def resolve_model(model: str | None) -> tuple[str, str, str | None]:
     """Return (backend_id, upstream_model_or_empty, alias_used)."""
+    # Cost-aware routing: prefer the cheapest available model, fall back to
+    # the normal default when nothing cheap is up.
+    if model in ("cheap", "auto-cheap"):
+        if resolved := resolve_cheap():
+            return resolved
+        model = DEFAULT_MODEL
+
     if not model or model in ("default", "auto"):
         model = DEFAULT_MODEL
 
@@ -235,6 +257,21 @@ def merge_models() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     statuses = all_backend_status()
+
+    # Dynamic cost-aware alias
+    cheap = resolve_cheap()
+    out.append(
+        {
+            "id": "cheap",
+            "object": "model",
+            "owned_by": "honeycomb/dynamic",
+            "backend": cheap[0] if cheap else None,
+            "resolves_to": cheap[1] if cheap else None,
+            "healthy": cheap is not None,
+            "order": CHEAP_ORDER,
+        }
+    )
+    seen.add("cheap")
 
     # Stable aliases first
     for alias, spec in ALIASES.items():
@@ -352,6 +389,14 @@ class Handler(BaseHTTPRequestHandler):
                 "active_window_sec": ACTIVE_WINDOW_SEC,
                 "aliases": {
                     k: v for k, v in ALIASES.items() if k != "default"
+                },
+                "cheap": {
+                    "order": CHEAP_ORDER,
+                    "resolves_to": (
+                        {"backend": c[0], "model": c[1]}
+                        if (c := resolve_cheap())
+                        else None
+                    ),
                 },
             }
             self._send(200, json.dumps(payload, indent=2).encode())
