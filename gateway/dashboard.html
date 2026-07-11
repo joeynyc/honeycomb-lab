@@ -252,7 +252,7 @@
   </div>
   <div class="header-right">
     <span id="nodeCount">0/0 NODES</span>
-    <span id="gwStatus" class="up">GW &#9679; :4000</span>
+    <span id="gwStatus" class="up">GW &#9679;</span>
     <span id="clock">--:--:--</span>
   </div>
 </header>
@@ -691,6 +691,31 @@
     renderLattice(nodes, vb);
     renderEdges(nodes, data.links || []);
     renderNodes(nodes);
+    renderEmptyState(nodes);
+  }
+
+  // First-run guidance: an empty map should say why it's empty.
+  function renderEmptyState(nodes) {
+    var existing = document.getElementById("emptyState");
+    if (nodes.length) {
+      if (existing) existing.remove();
+      return;
+    }
+    if (existing) return;
+    var el = document.createElement("div");
+    el.id = "emptyState";
+    el.style.cssText =
+      "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);" +
+      "text-align:center;color:#597A59;font-size:13px;line-height:1.9;" +
+      "background:rgba(11,17,11,.92);border:1px solid #334D33;padding:18px 26px;" +
+      "border-radius:4px;max-width:360px;z-index:50";
+    el.innerHTML =
+      "<div style='color:#7DFF3B;font-weight:bold;letter-spacing:2px'>NO NODES CONFIGURED</div>" +
+      "The gateway found no fleet definition.<br>" +
+      "Copy <span style='color:#B8EB9E'>fleet.example.json</span> to<br>" +
+      "<span style='color:#B8EB9E'>~/Library/Application Support/Honeycomb/fleet.json</span><br>" +
+      "and describe your machines. The map refreshes on its own.";
+    document.body.appendChild(el);
   }
 
   // ---------- Header ----------
@@ -706,7 +731,7 @@
     gwStatusEl.classList.toggle("up", gatewayUp);
     gwStatusEl.classList.toggle("down", !gatewayUp);
     gwStatusEl.innerHTML = gatewayUp
-      ? "GW &#9679; :4000"
+      ? "GW &#9679; :" + (location.port || "80")
       : "GATEWAY &#9675; DOWN";
 
     var now = new Date();

@@ -35,8 +35,24 @@ import nodes as fleet_nodes  # noqa: E402
 
 
 def load_config() -> dict[str, Any]:
-    with CONFIG_PATH.open() as f:
-        return json.load(f)
+    """Fresh clones won't have config.json yet (it's gitignored) — fall back
+    to the example with a loud warning instead of crash-looping under
+    launchd/systemd."""
+    try:
+        with CONFIG_PATH.open() as f:
+            return json.load(f)
+    except FileNotFoundError:
+        example = CONFIG_PATH.parent / "config.example.json"
+        print(
+            f"[gateway] {CONFIG_PATH} not found — copy {example.name} to "
+            f"config.json and edit your backends. Starting with the example "
+            f"config so you can see the dashboard.",
+            flush=True,
+        )
+        with example.open() as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"[gateway] {CONFIG_PATH} is not valid JSON: {e}") from e
 
 
 CFG = load_config()
@@ -111,6 +127,9 @@ def stats_snapshot() -> dict[str, Any]:
         return {k: dict(v) for k, v in _stats.items()}
 
 
+MAX_STATS_KEYS = 200
+
+
 def _update_stats(
     key: str,
     status: int | None,
@@ -120,6 +139,10 @@ def _update_stats(
 ) -> None:
     is_error = status is None or status == 0 or status >= 400
     with _stats_lock:
+        # Keys come from client-supplied model names — cap so a chatty or
+        # malicious client can't grow memory/disk without bound.
+        if key not in _stats and len(_stats) >= MAX_STATS_KEYS:
+            key = "(other)"
         s = _stats.setdefault(
             key,
             {
@@ -491,16 +514,31 @@ class Handler(BaseHTTPRequestHandler):
             return
         log(f"{self.address_string()} {line}")
 
-    def _send(self, code: int, body: bytes, content_type: str = "application/json") -> None:
+    def _send(
+        self,
+        code: int,
+        body: bytes,
+        content_type: str = "application/json",
+        cors: bool = True,
+    ) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # Control responses never get CORS — a malicious page in a browser on
+        # this network must not be able to read them or script the actions.
+        if cors:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
+    MAX_BODY_BYTES = 32 * 1024 * 1024  # plenty for chat payloads
+
     def _read_body(self) -> bytes:
         n = int(self.headers.get("Content-Length") or 0)
+        if n > self.MAX_BODY_BYTES:
+            # Refuse to buffer absurd payloads into memory.
+            self._send(413, json.dumps({"error": {"message": "request too large"}}).encode())
+            raise ConnectionAbortedError("body too large")
         return self.rfile.read(n) if n else b""
 
     def do_OPTIONS(self) -> None:  # noqa: N802
@@ -602,20 +640,26 @@ class Handler(BaseHTTPRequestHandler):
         if self.client_address[0] in ("127.0.0.1", "::1"):
             return True
         token = CFG.get("control_token")
-        return bool(token) and self.headers.get("X-Honeycomb-Token") == token
+        supplied = self.headers.get("X-Honeycomb-Token") or ""
+        # Placeholder from the example config never authorizes anything.
+        if not token or " " in token:
+            return False
+        import hmac
+
+        return hmac.compare_digest(supplied, token)
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path.rstrip("/") or "/"
 
         if path.startswith("/control/"):
             if not self._control_authorized():
-                self._send(401, json.dumps({"error": {"message": "control token required"}}).encode())
+                self._send(401, json.dumps({"error": {"message": "control token required"}}).encode(), cors=False)
                 return
             raw = self._read_body()
             try:
                 body = json.loads(raw.decode() or "{}")
             except json.JSONDecodeError:
-                self._send(400, json.dumps({"error": {"message": "invalid json"}}).encode())
+                self._send(400, json.dumps({"error": {"message": "invalid json"}}).encode(), cors=False)
                 return
             node_id = str(body.get("node") or "")
             action = path.removeprefix("/control/")
@@ -626,10 +670,10 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "container":
                 result = fleet_nodes.action_container(node_id, str(body.get("verb") or ""))
             else:
-                self._send(404, json.dumps({"error": {"message": f"unknown action {action}"}}).encode())
+                self._send(404, json.dumps({"error": {"message": f"unknown action {action}"}}).encode(), cors=False)
                 return
             log(f"control {action} node={node_id!r} ok={result.get('ok')}")
-            self._send(200, json.dumps(result).encode())
+            self._send(200, json.dumps(result).encode(), cors=False)
             return
 
         if path not in (

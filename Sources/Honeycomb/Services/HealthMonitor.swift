@@ -540,7 +540,7 @@ final class HealthMonitor {
         let result = await SubprocessCache.shared.value(key: "hw:\(host)", ttl: 8) {
             await Subprocess.run(
                 "/usr/bin/ssh",
-                ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, cmd],
+                ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "--", host, cmd],
                 timeout: 6
             )
         }
@@ -744,6 +744,7 @@ final class HealthMonitor {
                     "-o", "ConnectTimeout=3",
                     "-o", "StrictHostKeyChecking=accept-new",
                     "-o", "ConnectionAttempts=1",
+                    "--",
                     host,
                     "echo", "ok",
                 ],

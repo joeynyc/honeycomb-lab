@@ -24,6 +24,11 @@ struct ContentView: View {
                             onSelect: { monitor.select($0) }
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay {
+                            if monitor.nodes.isEmpty {
+                                emptyFleetHint
+                            }
+                        }
 
                         if showFeed {
                             TrafficFeed(feed: monitor.feed)
@@ -55,6 +60,32 @@ struct ContentView: View {
         }
         .frame(minWidth: 960, minHeight: 620)
         .preferredColorScheme(.dark)
+    }
+
+    /// First-run guidance when fleet.json is missing, empty, or malformed.
+    private var emptyFleetHint: some View {
+        VStack(spacing: 8) {
+            Text("NO NODES CONFIGURED")
+                .font(LabTheme.monoSmall.weight(.bold))
+                .tracking(2)
+                .foregroundStyle(LabTheme.phosphor)
+            Text("Edit the fleet definition and relaunch:")
+                .font(LabTheme.monoSmall)
+                .foregroundStyle(LabTheme.textMuted)
+            Text("~/Library/Application Support/Honeycomb/fleet.json")
+                .font(LabTheme.monoSmall)
+                .foregroundStyle(LabTheme.text)
+                .textSelection(.enabled)
+            Text("See fleet.example.json in the repo for the format.")
+                .font(LabTheme.monoTiny)
+                .foregroundStyle(LabTheme.textMuted)
+        }
+        .padding(22)
+        .background(LabTheme.panel.opacity(0.95))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(LabTheme.stroke, lineWidth: 1)
+        )
     }
 
     private var topBar: some View {

@@ -48,6 +48,7 @@ final class NodeControl {
             [
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=5",
+                "--",
                 host,
                 "docker", verb, target.container,
             ],

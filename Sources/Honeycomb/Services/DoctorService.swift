@@ -56,7 +56,7 @@ final class DoctorService {
 
         let result = await Subprocess.run(
             "/usr/bin/ssh",
-            ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, command],
+            ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "--", host, command],
             // collectors + GPU sampling take a while
             timeout: 120
         )

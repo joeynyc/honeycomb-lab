@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -100,7 +101,7 @@ def _ssh_metrics(host: str) -> dict[str, Any] | None:
         "free -m | awk '/^Mem:/{print $3, $2}'; "
         "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits"
     )
-    code, out = _run(["ssh", *SSH_OPTS, host, cmd], timeout=7)
+    code, out = _run(["ssh", *SSH_OPTS, "--", host, cmd], timeout=7)
     if code != 0:
         return None
     lines = [l.strip() for l in out.splitlines() if l.strip()]
@@ -151,7 +152,7 @@ def _probe_vllm_ssh(node: dict[str, Any]) -> dict[str, Any]:
     host = node.get("sshHost")
     ssh_ok = False
     if host:
-        code, _ = _run(["ssh", *SSH_OPTS, host, "echo", "ok"], timeout=6)
+        code, _ = _run(["ssh", *SSH_OPTS, "--", host, "echo", "ok"], timeout=6)
         ssh_ok = code == 0
     infer_ok, models, latency = _http_models(node["baseURL"], node.get("modelsPath", "/v1/models"))
 
@@ -222,7 +223,7 @@ def _probe_lmlink_peer(node: dict[str, Any]) -> dict[str, Any]:
     ssh_ok = False
     host = node.get("sshHost")
     if not link_ok and host:
-        code, _ = _run(["ssh", *SSH_OPTS, host, "echo", "ok"], timeout=6)
+        code, _ = _run(["ssh", *SSH_OPTS, "--", host, "echo", "ok"], timeout=6)
         ssh_ok = code == 0
     host_up = link_ok or ssh_ok
     health = "online" if host_up else "offline"
@@ -422,7 +423,7 @@ def action_doctor(node_id: str) -> dict[str, Any]:
     if not node or not (node.get("doctorCommand") and node.get("sshHost")):
         return {"ok": False, "error": "node has no doctorCommand"}
     code, out = _run(
-        ["ssh", *SSH_OPTS, node["sshHost"], node["doctorCommand"]], timeout=120
+        ["ssh", *SSH_OPTS, "--", node["sshHost"], node["doctorCommand"]], timeout=120
     )
     report: dict[str, Any] = {"ts": time.time(), "findings": [], "error": None}
     try:
@@ -451,7 +452,7 @@ def action_container(node_id: str, verb: str) -> dict[str, Any]:
     if not node or not (node.get("container") and node.get("sshHost")):
         return {"ok": False, "error": "node has no container"}
     code, out = _run(
-        ["ssh", *SSH_OPTS, node["sshHost"], "docker", verb, node["container"]],
+        ["ssh", *SSH_OPTS, "--", node["sshHost"], "docker", verb, shlex.quote(node["container"])],
         timeout=60 if verb == "stop" else 40,
     )
     if code == 0:
