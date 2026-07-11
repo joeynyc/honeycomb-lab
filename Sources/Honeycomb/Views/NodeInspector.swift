@@ -55,18 +55,21 @@ struct NodeInspector: View {
                     .font(.system(size: 18, weight: .bold, design: .monospaced))
                     .foregroundStyle(LabTheme.phosphor)
                 Spacer()
-                Text(node.role.rawValue)
+                Text(node.roleLabel)
                     .font(LabTheme.monoTiny)
                     .foregroundStyle(LabTheme.phosphorDim)
             }
 
             row("HOST", "\(node.hostname) · \(node.hostAddress)")
-            row("ROLE", node.role.rawValue)
+            row("ROLE", node.roleLabel)
             row("HEALTH", "\(node.health.glyph) \(node.health.rawValue.uppercased())")
             row("PATH", node.pathBadge)
-            if node.id == "pc4080" {
-                row("LINK", node.dashboardOK ? "ZeroCool · LM Link connected" : "LM Link peer not seen")
-                row("SSH", (node.sshHost ?? "zerocool") + (node.sshOK ? " · ok" : " · down"))
+            if node.probe == .lmlinkPeer {
+                let peer = node.lmLinkPeer ?? node.hostname
+                row("LINK", node.dashboardOK ? "\(peer) · LM Link connected" : "LM Link peer not seen")
+                if let ssh = node.sshHost {
+                    row("SSH", ssh + (node.sshOK ? " · ok" : " · down"))
+                }
             } else {
                 if let ssh = node.sshHost {
                     row("SSH", ssh + (node.sshOK ? " · ok" : " · down"))
@@ -75,18 +78,23 @@ struct NodeInspector: View {
                     row("SYNC", node.dashboardOK ? "dashboard tunnel ok" : "no dashboard tunnel")
                 }
             }
-            if node.id == "mini" {
+            switch node.probe {
+            case .lmstudioHub:
                 row("INFER", node.inferenceOK
                     ? "LM Studio · \(node.baseURL.absoluteString)"
                     : "LM Studio server off (lms server start)")
-            } else if node.id == "pc4080" {
+            case .lmlinkPeer:
                 row("INFER", node.inferenceOK
-                    ? "API via Mini LMS · \(node.baseURL.absoluteString)"
-                    : "no chat API yet (load model on PC / start LMS on Mini)")
-            } else {
+                    ? "API via hub LMS · \(node.baseURL.absoluteString)"
+                    : "no chat API yet (load model on peer / start hub LMS)")
+            case .vllmSSH:
                 row("INFER", node.inferenceOK
                     ? "vLLM · \(node.baseURL.absoluteString)"
-                    : "idle (no vLLM on :8000)")
+                    : "idle (no vLLM serving)")
+            case .httpOnly:
+                row("INFER", node.inferenceOK
+                    ? "API · \(node.baseURL.absoluteString)"
+                    : "API not answering")
             }
             if !node.statusDetail.isEmpty {
                 row("LINKS", node.statusDetail)
@@ -136,7 +144,7 @@ struct NodeInspector: View {
                 }
             }
 
-            Text(node.id == "mini" || node.id == "pc4080" ? "LOADED MODELS" : "SERVING MODELS")
+            Text(node.probe == .lmstudioHub || node.probe == .lmlinkPeer ? "LOADED MODELS" : "SERVING MODELS")
                 .font(LabTheme.monoTiny)
                 .foregroundStyle(LabTheme.phosphorDim)
                 .padding(.top, 4)
@@ -183,7 +191,7 @@ struct NodeInspector: View {
                         labelChip("OPEN API")
                     }
                 }
-                if PingService.aliases[node.id] != nil {
+                if node.pingAlias != nil {
                     Button {
                         Task { await ping.ping(node: node) }
                     } label: {

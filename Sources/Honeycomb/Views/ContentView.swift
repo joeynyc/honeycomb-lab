@@ -19,6 +19,7 @@ struct ContentView: View {
                     VStack(spacing: 10) {
                         HoneycombCanvas(
                             nodes: monitor.nodes,
+                            extraLinks: monitor.fleet.links,
                             selectedID: monitor.selectedNodeID,
                             onSelect: { monitor.select($0) }
                         )
@@ -61,14 +62,15 @@ struct ContentView: View {
                 HexMark(size: 36)
                     .shadow(color: LabTheme.phosphor.opacity(0.4), radius: 8)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("HONEYCOMB")
+                    Text(monitor.fleet.title)
                         .font(.system(size: 26, weight: .heavy, design: .monospaced))
                         .foregroundStyle(LabTheme.phosphor)
                         .shadow(color: LabTheme.phosphor.opacity(0.35), radius: 10)
-                    Text("LAB  ·  JOEYDGX  ·  GX10  ·  4080  ·  MINI")
+                    Text(monitor.nodes.map { $0.name.uppercased() }.joined(separator: "  ·  "))
                         .font(LabTheme.monoTiny)
                         .tracking(2)
                         .foregroundStyle(LabTheme.phosphorDim)
+                        .lineLimit(1)
                 }
             }
 

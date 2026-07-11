@@ -118,3 +118,17 @@ Direct hits to gx10 `:8000` (bypassing the gateway) will **not** light the map.
 - JoeyDGX is **main**; gx10 is **peer**.
 - Gateway is stdlib Python only (no pip deps).
 - Daily loop: **map (Honeycomb)** + **wire (gateway :4000)** + **agent (OMP/Cursor)**.
+
+## Use with your own fleet
+
+Node definitions live in `~/Library/Application Support/Honeycomb/fleet.json` (created from the bundled default on first launch; edit it and relaunch). Copy `fleet.example.json` as a starting point.
+
+**Probe types:**
+- `vllm-ssh` — GPU box running vLLM, SSH reachability = online.
+- `lmstudio-hub` — the Mac running the app, serving via LM Studio.
+- `lmlink-peer` — a remote GPU reached through the hub's LM Studio via LM Link; set `lmLinkPeer` to the peer's device name.
+- `http-only` — any OpenAI-compatible endpoint.
+
+**Fields:** `gatewayBackend` / `pingAlias` map nodes to backends in `gateway/config.json` so hexes light on traffic; `container` enables SERVE/STOP over SSH (docker start/stop); `hub: true` marks the center node; axial `[q,r]` optionally pins map position; `links` adds extra edges. The gateway's backends/aliases are configured separately in `gateway/config.json`.
+
+Set `HONEYCOMB_FLEET` env var to override the fleet file path.

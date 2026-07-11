@@ -84,7 +84,7 @@ struct MenuBarPanel: View {
                                 .foregroundStyle(LabTheme.phosphor)
                         }
                     }
-                    Text(node.pathBadge + " · " + node.role.shortLabel)
+                    Text(node.pathBadge + " · " + node.roleShort)
                         .font(LabTheme.monoTiny)
                         .foregroundStyle(LabTheme.textMuted)
                 }

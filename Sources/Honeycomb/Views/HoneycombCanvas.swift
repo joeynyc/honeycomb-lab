@@ -3,6 +3,8 @@ import SwiftUI
 /// Hex lattice background + live node hexes (axial layout).
 struct HoneycombCanvas: View {
     let nodes: [LabNode]
+    /// Extra edges from fleet.json, beyond the implicit hub→node spokes
+    var extraLinks: [(String, String)] = []
     let selectedID: String?
     let onSelect: (String) -> Void
 
@@ -100,15 +102,24 @@ struct HoneycombCanvas: View {
         }
     }
 
+    /// Hub → every other node, plus explicit fleet.json links.
+    private var edgePairs: [(String, String)] {
+        var pairs: [(String, String)] = []
+        if let hub = nodes.first(where: { $0.isHub }) {
+            for node in nodes where node.id != hub.id {
+                pairs.append((hub.id, node.id))
+            }
+        }
+        for (a, b) in extraLinks
+        where !pairs.contains(where: { ($0.0 == a && $0.1 == b) || ($0.0 == b && $0.1 == a) }) {
+            pairs.append((a, b))
+        }
+        return pairs
+    }
+
     private func drawEdges(context: GraphicsContext, center: CGPoint, time: TimeInterval) {
-        // Mini is hub; Sparks peer-linked; 4080 to mini
-        let pairs: [(String, String)] = [
-            ("mini", "joeydgx"),
-            ("mini", "gx10"),
-            ("mini", "pc4080"),
-            ("joeydgx", "gx10"),
-        ]
-        for (a, b) in pairs {
+        let hubID = nodes.first(where: { $0.isHub })?.id
+        for (a, b) in edgePairs {
             guard let na = nodes.first(where: { $0.id == a }),
                   let nb = nodes.first(where: { $0.id == b })
             else { continue }
@@ -123,12 +134,14 @@ struct HoneycombCanvas: View {
             let color = bothLive
                 ? LabTheme.phosphor.opacity(0.35)
                 : LabTheme.strokeDim.opacity(0.6)
-            let width: CGFloat = (a == "joeydgx" && b == "gx10") ? 2.2 : 1.2
+            // Explicit (non-spoke) links draw heavier
+            let isSpoke = a == hubID || b == hubID
+            let width: CGFloat = isSpoke ? 1.2 : 2.2
 
             context.stroke(path, with: .color(color), lineWidth: width)
 
             // Traffic pulses travel hub → destination while the node is LIT
-            if a == "mini" && nb.isStreaming {
+            if a == hubID && nb.isStreaming {
                 drawPulses(context: context, from: pa, to: pb, time: time)
             }
         }
@@ -227,7 +240,7 @@ struct NodeHexView: View {
                 let base = model.split(separator: "/").last.map(String.init) ?? model
                 return base.count > 14 ? String(base.prefix(12)) + "…" : base
             }
-            return node.role.shortLabel
+            return node.roleShort
         }
     }
 

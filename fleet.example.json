@@ -1,0 +1,33 @@
+{
+  "title": "MYLAB",
+  "nodes": [
+    {
+      "id": "spark1",
+      "name": "Spark One",
+      "role": "DGX SPARK",
+      "shortLabel": "SPARK",
+      "probe": "vllm-ssh",
+      "baseURL": "http://192.168.1.50:8000",
+      "hostname": "spark-abcd",
+      "address": "192.168.1.50",
+      "sshHost": "spark1",
+      "gatewayBackend": "spark1",
+      "pingAlias": "spark-main",
+      "container": "my-vllm-container",
+      "notes": "Online = SSH reachable. Models = whatever vLLM serves."
+    },
+    {
+      "id": "hub",
+      "name": "My Mac",
+      "role": "CONTROL PLANE",
+      "shortLabel": "HUB",
+      "probe": "lmstudio-hub",
+      "baseURL": "http://127.0.0.1:1234",
+      "gatewayBackend": "lms",
+      "pingAlias": "local-lms",
+      "hub": true,
+      "notes": "The machine Honeycomb runs on."
+    }
+  ],
+  "links": []
+}

@@ -2,12 +2,12 @@ import Foundation
 import Observation
 
 /// Start/stop inference on remote nodes over SSH — Docker containers that
-/// already exist on the Spark, so config (model, flags, ports) is preserved.
-/// Container names live in ~/Library/Application Support/Honeycomb/control.json.
+/// already exist on the host, so config (model, flags, ports) is preserved.
+/// Container names come from fleet.json (node "container" field).
 @MainActor
 @Observable
 final class NodeControl {
-    struct Target: Codable, Sendable {
+    struct Target: Sendable {
         /// Existing Docker container to start/stop (e.g. "qwen36-35b-nvfp4")
         var container: String
     }
@@ -18,23 +18,12 @@ final class NodeControl {
         var isError: Bool
     }
 
-    private(set) var targets: [String: Target] = [:]
     private(set) var busyNodeID: String?
     private(set) var lastResult: ActionResult?
 
-    private let fileURL: URL
-
-    init() {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Honeycomb", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        fileURL = dir.appendingPathComponent("control.json")
-        load()
-    }
-
     func target(for node: LabNode) -> Target? {
-        guard node.sshHost != nil else { return nil }
-        return targets[node.id]
+        guard node.sshHost != nil, let container = node.container else { return nil }
+        return Target(container: container)
     }
 
     func start(_ node: LabNode) async {
@@ -48,7 +37,7 @@ final class NodeControl {
     private func run(_ node: LabNode, verb: String) async {
         guard busyNodeID == nil,
               let host = node.sshHost,
-              let target = targets[node.id]
+              let target = target(for: node)
         else { return }
         busyNodeID = node.id
         lastResult = nil
@@ -84,19 +73,4 @@ final class NodeControl {
         }
     }
 
-    private func load() {
-        if let data = try? Data(contentsOf: fileURL),
-           let decoded = try? JSONDecoder().decode([String: Target].self, from: data) {
-            targets = decoded
-            return
-        }
-        // First run: write discovered defaults so they're user-editable.
-        targets = [
-            "gx10": Target(container: "qwen36-35b-nvfp4"),
-            "joeydgx": Target(container: "nemotron-puzzle-75b"),
-        ]
-        if let data = try? JSONEncoder().encode(targets) {
-            try? data.write(to: fileURL, options: .atomic)
-        }
-    }
 }

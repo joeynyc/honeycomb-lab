@@ -1,22 +1,6 @@
 import Foundation
 import SwiftUI
 
-enum NodeRole: String, Codable, CaseIterable, Sendable {
-    case mainSpark = "MAIN SPARK"
-    case peerSpark = "PEER SPARK"
-    case controlPlane = "CONTROL PLANE"
-    case desktopGPU = "DESKTOP GPU"
-
-    var shortLabel: String {
-        switch self {
-        case .mainSpark: return "MAIN"
-        case .peerSpark: return "PEER"
-        case .controlPlane: return "HUB"
-        case .desktopGPU: return "4080"
-        }
-    }
-}
-
 enum NodeHealth: String, Sendable {
     case online
     case degraded
@@ -63,14 +47,27 @@ struct LabNode: Identifiable, Sendable, Equatable {
     var hostname: String
     /// LAN or Tailscale address used for reachability context
     var hostAddress: String
-    var role: NodeRole
+    var roleLabel: String
+    var roleShort: String
+    var probe: ProbeKind
     /// OpenAI-compatible inference base when this node serves chat
     var baseURL: URL
     var modelsPath: String
-    /// NVIDIA Sync / SSH alias
+    /// SSH alias (NVIDIA Sync host, or any ~/.ssh/config entry)
     var sshHost: String?
-    /// NVIDIA Sync local dashboard tunnel (DGX only)
+    /// Dashboard tunnel to check (optional)
     var dashboardURL: URL?
+    /// Gateway backend id this node serves behind (for LIT mapping)
+    var gatewayBackend: String?
+    /// If set, gateway activity lights this hex only for these aliases
+    var litAliases: [String]?
+    /// Gateway alias the PING button uses
+    var pingAlias: String?
+    /// Docker container name for SERVE/STOP over SSH
+    var container: String?
+    /// LM Link peer name (lmlink-peer probes)
+    var lmLinkPeer: String?
+    var isHub: Bool
     var notes: String
 
     /// Axial coords for honeycomb layout (q, r)
@@ -95,10 +92,12 @@ struct LabNode: Identifiable, Sendable, Equatable {
         if models.isEmpty {
             if inferenceOK { return "API up · nothing loaded" }
             if health == .online || health == .degraded {
-                if id == "mini" { return "control plane" }
-                if id == "pc4080" { return "LM Link · no model loaded on PC" }
-                if sshHost != nil { return "Sync connected · no vLLM" }
-                return "connected"
+                switch probe {
+                case .lmstudioHub: return "control plane"
+                case .lmlinkPeer: return "LM Link · no model loaded"
+                case .vllmSSH: return sshHost != nil ? "connected · no vLLM" : "connected"
+                case .httpOnly: return "connected"
+                }
             }
             return "—"
         }
@@ -118,26 +117,22 @@ struct LabNode: Identifiable, Sendable, Equatable {
 
     /// Single accurate path label for hex / strip (never "ONLINE" + "OFF" together)
     var pathBadge: String {
-        switch id {
-        case "pc4080":
+        if isStreaming { return "LIT" }
+        switch probe {
+        case .lmlinkPeer:
             if health == .offline { return "DOWN" }
-            if isStreaming { return "LIT" }
-            if dashboardOK && inferenceOK { return "LM LINK" } // mesh + Mini LMS API
             if dashboardOK { return "LM LINK" }
             if sshOK { return "SSH" }
             return health == .online ? "UP" : "DOWN"
-        case "mini":
-            if isStreaming { return "LIT" }
+        case .lmstudioHub:
             return inferenceOK ? "LMS" : "HUB"
-        case "joeydgx", "gx10":
+        case .vllmSSH:
             if health == .offline { return "DOWN" }
-            if isStreaming { return "LIT" }
-            if inferenceOK { return "SYNC+vLLM" }
-            if sshOK || dashboardOK { return "SYNC" }
+            if inferenceOK { return "SSH+vLLM" }
+            if sshOK || dashboardOK { return "SSH" }
             return "DOWN"
-        default:
-            if isStreaming { return "LIT" }
-            return health.rawValue.uppercased()
+        case .httpOnly:
+            return health == .online ? "API" : health.rawValue.uppercased()
         }
     }
 
@@ -146,8 +141,8 @@ struct LabNode: Identifiable, Sendable, Equatable {
         switch pathBadge {
         case "DOWN", "OFF": return LabTheme.alert
         case "SSH": return LabTheme.amber
-        case "LM LINK", "SYNC+vLLM", "LMS", "LIT": return LabTheme.phosphorDim
-        case "SYNC", "HUB", "UP": return LabTheme.amber.opacity(0.9)
+        case "LM LINK", "SSH+vLLM", "LMS", "LIT", "API": return LabTheme.phosphorDim
+        case "HUB", "UP": return LabTheme.amber.opacity(0.9)
         default: return LabTheme.dim
         }
     }
@@ -161,68 +156,8 @@ struct LabNode: Identifiable, Sendable, Equatable {
             && lhs.lastError == rhs.lastError
             && lhs.isStreaming == rhs.isStreaming
             && lhs.sshOK == rhs.sshOK
-            // isStreaming already compared
             && lhs.dashboardOK == rhs.dashboardOK
             && lhs.inferenceOK == rhs.inferenceOK
             && lhs.statusDetail == rhs.statusDetail
     }
-}
-
-enum LabCatalog {
-    /// Real lab nodes only.
-    static let seed: [LabNode] = [
-        LabNode(
-            id: "joeydgx",
-            name: "JoeyDGX",
-            hostname: "spark-db08",
-            hostAddress: "192.168.1.15",
-            role: .mainSpark,
-            baseURL: URL(string: "http://192.168.1.15:8000")!,
-            modelsPath: "/v1/models",
-            sshHost: "JoeyDGX",
-            dashboardURL: URL(string: "http://127.0.0.1:11000")!,
-            notes: "Primary DGX Spark (GB10). Online = NVIDIA Sync SSH. Models = only what vLLM is serving.",
-            axial: (q: -1, r: 0)
-        ),
-        LabNode(
-            id: "gx10",
-            name: "gx10",
-            hostname: "gx10-3028",
-            hostAddress: "192.168.1.192",
-            role: .peerSpark,
-            baseURL: URL(string: "http://192.168.1.192:8000")!,
-            modelsPath: "/v1/models",
-            sshHost: "gx10",
-            dashboardURL: nil,
-            notes: "Peer Spark. Models = only the active vLLM serve (e.g. Qwen3.6-35B NVFP4).",
-            axial: (q: 1, r: 0)
-        ),
-        LabNode(
-            id: "mini",
-            name: "Mac mini",
-            hostname: "Mac-mini",
-            hostAddress: "192.168.1.11",
-            role: .controlPlane,
-            // LM Studio local server (also front door for LM Link remote models)
-            baseURL: URL(string: "http://127.0.0.1:1234")!,
-            modelsPath: "/v1/models",
-            sshHost: nil,
-            dashboardURL: nil,
-            notes: "Honeycomb hub. Gateway: http://127.0.0.1:4000/v1 · LMS :1234.",
-            axial: (q: 0, r: -1)
-        ),
-        LabNode(
-            id: "pc4080",
-            name: "PC 4080",
-            hostname: "ZeroCool",
-            hostAddress: "100.67.238.63",
-            role: .desktopGPU,
-            baseURL: URL(string: "http://127.0.0.1:1234")!,
-            modelsPath: "/v1/models",
-            sshHost: "zerocool",
-            dashboardURL: nil,
-            notes: "RTX 4080 via LM Link (peer ZeroCool). Models = loaded on the PC device only.",
-            axial: (q: 0, r: 1)
-        ),
-    ]
 }

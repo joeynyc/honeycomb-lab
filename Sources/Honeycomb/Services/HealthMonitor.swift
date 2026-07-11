@@ -25,10 +25,14 @@ final class HealthMonitor {
     private let pollInterval: Duration
     private let gatewayURL = URL(string: "http://127.0.0.1:4000/health")!
 
-    init(nodes: [LabNode] = LabCatalog.seed, pollInterval: Duration = .seconds(4)) {
-        self.nodes = nodes
-        self.selectedNodeID = nodes.first(where: { $0.role == .mainSpark })?.id
-            ?? nodes.first?.id
+    /// Fleet description loaded from fleet.json (title, nodes, extra links)
+    let fleet: FleetStore.Fleet
+
+    init(fleet: FleetStore.Fleet = FleetStore.load(), pollInterval: Duration = .seconds(4)) {
+        self.fleet = fleet
+        self.nodes = fleet.nodes
+        self.selectedNodeID = fleet.nodes.first(where: { !$0.isHub })?.id
+            ?? fleet.nodes.first?.id
         self.pollInterval = pollInterval
 
         let config = URLSessionConfiguration.ephemeral
@@ -108,8 +112,17 @@ final class HealthMonitor {
                 health: result.health,
                 latencyMs: result.latencyMs
             )
-            // Lit = gateway saw traffic to this node recently
-            nodes[idx].isStreaming = gateway.nodeActivity[id] ?? false
+            // Lit = gateway saw traffic to this node's backend recently
+            // (litAliases narrows shared backends, e.g. hub vs LM Link peer)
+            nodes[idx].isStreaming = {
+                guard let bid = nodes[idx].gatewayBackend,
+                      let act = gateway.backendActivity[bid], act.active
+                else { return false }
+                if let filter = nodes[idx].litAliases, !filter.isEmpty {
+                    return act.lastAlias.map { filter.contains($0) } ?? false
+                }
+                return true
+            }()
         }
     }
 
@@ -131,10 +144,15 @@ final class HealthMonitor {
         return m
     }
 
+    private struct BackendActivity: Sendable {
+        var active: Bool
+        var lastAlias: String?
+    }
+
     private struct GatewaySnapshot: Sendable {
         var ok: Bool
         var detail: String
-        var nodeActivity: [String: Bool]
+        var backendActivity: [String: BackendActivity]
     }
 
     /// One row of the gateway's /requests ring buffer.
@@ -180,10 +198,11 @@ final class HealthMonitor {
     }
 
     private nonisolated static func probeAll(nodes: [LabNode], session: URLSession) async -> [(String, ProbeResult)] {
-        await withTaskGroup(of: (String, ProbeResult).self) { group in
+        let peerNames = nodes.compactMap(\.lmLinkPeer)
+        return await withTaskGroup(of: (String, ProbeResult).self) { group in
             for node in nodes {
                 group.addTask {
-                    let result = await Self.probe(node: node, session: session)
+                    let result = await Self.probe(node: node, session: session, peerNames: peerNames)
                     return (node.id, result)
                 }
             }
@@ -201,42 +220,32 @@ final class HealthMonitor {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                return GatewaySnapshot(ok: false, detail: "gateway HTTP error", nodeActivity: [:])
+                return GatewaySnapshot(ok: false, detail: "gateway HTTP error", backendActivity: [:])
             }
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return GatewaySnapshot(ok: true, detail: "gateway up", nodeActivity: [:])
+                return GatewaySnapshot(ok: true, detail: "gateway up", backendActivity: [:])
             }
-            var activity: [String: Bool] = [:]
-            if let na = obj["node_activity"] as? [String: Any] {
-                for (k, v) in na {
-                    activity[k] = (v as? Bool) ?? false
-                }
-            }
-            // Also map backend-level active flags
+            // Generic backend activity — nodes map themselves onto it via
+            // gatewayBackend / litAliases from fleet.json.
+            var activity: [String: BackendActivity] = [:]
+            var up = 0
             if let backends = obj["backends"] as? [String: Any] {
-                if let gx = backends["gx10"] as? [String: Any], gx["active"] as? Bool == true {
-                    activity["gx10"] = true
-                }
-                if let jd = backends["joeydgx"] as? [String: Any], jd["active"] as? Bool == true {
-                    activity["joeydgx"] = true
-                }
-                if let lms = backends["lms"] as? [String: Any], lms["active"] as? Bool == true {
-                    activity["mini"] = true
-                    let alias = (lms["last_alias"] as? String) ?? ""
-                    if alias.hasPrefix("pc") || alias.contains("4080") {
-                        activity["pc4080"] = true
-                    }
+                for (bid, raw) in backends {
+                    guard let be = raw as? [String: Any] else { continue }
+                    if be["healthy"] as? Bool == true { up += 1 }
+                    activity[bid] = BackendActivity(
+                        active: be["active"] as? Bool ?? false,
+                        lastAlias: be["last_alias"] as? String
+                    )
                 }
             }
-            let up = (obj["backends"] as? [String: Any])?.values.compactMap { $0 as? [String: Any] }
-                .filter { $0["healthy"] as? Bool == true }.count ?? 0
             return GatewaySnapshot(
                 ok: true,
                 detail: "gateway :4000 · \(up) backends up",
-                nodeActivity: activity
+                backendActivity: activity
             )
         } catch {
-            return GatewaySnapshot(ok: false, detail: "gateway down · start gateway/start.sh", nodeActivity: [:])
+            return GatewaySnapshot(ok: false, detail: "gateway down · start gateway/start.sh", backendActivity: [:])
         }
     }
 
@@ -296,28 +305,40 @@ final class HealthMonitor {
         return URL(string: base + path) ?? node.baseURL.appendingPathComponent("v1/models")
     }
 
-    private nonisolated static func probe(node: LabNode, session: URLSession) async -> ProbeResult {
-        switch node.id {
-        case "pc4080":
-            return await probePC(node: node, session: session)
-        case "mini":
-            return await probeControlPlane(node: node, session: session)
-        default:
-            // DGX Sparks: real connection = NVIDIA Sync SSH
+    private nonisolated static func probe(
+        node: LabNode,
+        session: URLSession,
+        peerNames: [String]
+    ) async -> ProbeResult {
+        switch node.probe {
+        case .lmlinkPeer:
+            return await probeLMLinkPeer(node: node, session: session)
+        case .lmstudioHub:
+            return await probeHub(node: node, session: session, peerNames: peerNames)
+        case .vllmSSH:
             if node.sshHost != nil {
                 return await probeDGX(node: node, session: session)
             }
             return await probeHTTPOnly(node: node, session: session)
+        case .httpOnly:
+            return await probeHTTPOnly(node: node, session: session)
         }
     }
 
-    /// Mac mini hub — this machine. Never list huge catalogs.
+    /// The hub — the machine the app runs on. Never list huge catalogs.
     /// Online always (we're running here). Models = currently *loaded* in LM Studio (`lms ps`).
-    private nonisolated static func probeControlPlane(node: LabNode, session: URLSession) async -> ProbeResult {
+    private nonisolated static func probeHub(
+        node: LabNode,
+        session: URLSession,
+        peerNames: [String]
+    ) async -> ProbeResult {
         let start = ContinuousClock.now
 
         async let server: (Bool, _, _) = checkInference(node: node, session: session)
-        async let loaded: [String] = listLMStudioLoadedModels(deviceFilter: nil) // local only
+        async let loaded: [String] = listLMStudioLoadedModels(
+            deviceFilter: nil,
+            excludeDevices: peerNames // local only — skip LM Link peer rows
+        )
         async let linkSelf: (Bool, String) = checkLMLinkSelf()
 
         let (serverOK, _, _) = await server
@@ -350,7 +371,10 @@ final class HealthMonitor {
     }
 
     /// Loaded models only (`lms ps`), optionally filtered by DEVICE column.
-    private nonisolated static func listLMStudioLoadedModels(deviceFilter: String?) async -> [String] {
+    private nonisolated static func listLMStudioLoadedModels(
+        deviceFilter: String?,
+        excludeDevices: [String] = []
+    ) async -> [String] {
         let text = await lmsOutput(["ps"], cacheKey: "lms-ps")
         if text.localizedCaseInsensitiveContains("No models are currently loaded") {
             return []
@@ -367,10 +391,9 @@ final class HealthMonitor {
             else { continue }
             if let filter = deviceFilter {
                 guard line.localizedCaseInsensitiveContains(filter) else { continue }
-            } else {
-                // Local hub: skip rows that are only on a remote device name
-                // (lms ps format varies; keep lines without a remote peer if ambiguous)
-                if line.localizedCaseInsensitiveContains("ZeroCool") { continue }
+            } else if excludeDevices.contains(where: { line.localizedCaseInsensitiveContains($0) }) {
+                // Local hub: skip rows that belong to a remote LM Link peer
+                continue
             }
             let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
             if let id = parts.first, id.count > 2 {
@@ -386,20 +409,21 @@ final class HealthMonitor {
         return (online, online ? "link self online" : "lm link offline on mini")
     }
 
-    /// PC RTX 4080 — LM Link peer (ZeroCool) is the real connection.
-    /// Local LM Studio server on the Mini exposes OpenAI API including remote Link models.
-    private nonisolated static func probePC(node: LabNode, session: URLSession) async -> ProbeResult {
+    /// Remote GPU behind LM Link — the Link peer connection is the real path.
+    /// The hub's LM Studio exposes an OpenAI API including remote Link models.
+    private nonisolated static func probeLMLinkPeer(node: LabNode, session: URLSession) async -> ProbeResult {
         let start = ContinuousClock.now
+        let peerName = node.lmLinkPeer ?? node.hostname
 
         async let ssh: (Bool, String?) = {
             guard let host = node.sshHost else { return (false, nil) }
             return await checkSSH(host: host)
         }()
-        async let link: (Bool, String) = checkLMLinkPeer(name: "ZeroCool")
+        async let link: (Bool, String) = checkLMLinkPeer(name: peerName)
         async let lmsServer: (Bool, [String], String?) = checkInference(node: node, session: session)
-        // Disk inventory on peer is noisy; prefer *loaded* on ZeroCool if any.
-        async let remoteLoaded: [String] = listLMStudioLoadedModels(deviceFilter: "ZeroCool")
-        async let remoteDisk: [String] = listLMStudioModelsOnDevice(device: "ZeroCool")
+        // Disk inventory on peer is noisy; prefer *loaded* on the peer if any.
+        async let remoteLoaded: [String] = listLMStudioLoadedModels(deviceFilter: peerName)
+        async let remoteDisk: [String] = listLMStudioModelsOnDevice(device: peerName)
 
         let (sshOK, sshErr) = await ssh
         let (linkOK, linkDetail) = await link
@@ -419,11 +443,11 @@ final class HealthMonitor {
         if sshOK { parts.append("ssh") }
         if serverOK { parts.append("lms-api") }
         if !loadedOnPC.isEmpty {
-            parts.append("\(loadedOnPC.count) loaded on PC")
+            parts.append("\(loadedOnPC.count) loaded on \(peerName)")
         } else if !diskOnPC.isEmpty {
             parts.append("\(diskOnPC.count) on disk · none loaded")
         } else {
-            parts.append("no PC model loaded")
+            parts.append("no model loaded on \(peerName)")
         }
 
         let detail: String
@@ -450,10 +474,10 @@ final class HealthMonitor {
         )
     }
 
-    /// Parse `lms link status` for a named peer (e.g. ZeroCool).
+    /// Parse `lms link status` for a named peer.
     private nonisolated static func checkLMLinkPeer(name: String) async -> (Bool, String) {
         let text = await lmsOutput(["link", "status"], cacheKey: "lms-link-status")
-        // Look for peer block: "- ZeroCool" then "Status: connected"
+        // Look for peer block: "- <name>" then "Status: connected"
         let connected: Bool = {
             let lines = text.components(separatedBy: .newlines)
             var inPeer = false
@@ -548,7 +572,7 @@ final class HealthMonitor {
         return (kv, running, genTotal)
     }
 
-    /// JoeyDGX / gx10 — SSH is the ground truth for "is the Spark connected?"
+    /// DGX-style node — SSH is the ground truth for "is the host connected?"
     private nonisolated static func probeDGX(node: LabNode, session: URLSession) async -> ProbeResult {
         let start = ContinuousClock.now
 
@@ -738,7 +762,7 @@ final class HealthMonitor {
         session: URLSession
     ) async -> (Bool, [String], String?, Double?) {
         var candidates = [modelsURL(for: node)]
-        if node.id == "pc4080" {
+        if node.probe == .lmlinkPeer {
             let base = node.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             if let tags = URL(string: base + "/api/tags") {
                 candidates.append(tags)

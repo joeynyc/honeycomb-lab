@@ -19,13 +19,6 @@ final class PingService {
     private let session: URLSession
     private let gatewayURL = URL(string: "http://127.0.0.1:4000/v1/chat/completions")!
 
-    /// Node id → gateway alias (see gateway/config.json)
-    static let aliases: [String: String] = [
-        "gx10": "spark-peer",
-        "joeydgx": "spark-main",
-        "pc4080": "pc-4080",
-        "mini": "local-lms",
-    ]
 
     init() {
         let config = URLSessionConfiguration.ephemeral
@@ -38,7 +31,7 @@ final class PingService {
     }
 
     func ping(node: LabNode) async {
-        guard !isPinging, let alias = Self.aliases[node.id] else { return }
+        guard !isPinging, let alias = node.pingAlias else { return }
         isPinging = true
         defer { isPinging = false }
         result = nil
