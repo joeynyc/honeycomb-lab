@@ -596,8 +596,42 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, json.dumps({"error": {"message": f"not found: {path}"}}).encode())
 
+    def _control_authorized(self) -> bool:
+        """Control actions run remote commands — require the token except
+        from localhost (the Mac app / local curl)."""
+        if self.client_address[0] in ("127.0.0.1", "::1"):
+            return True
+        token = CFG.get("control_token")
+        return bool(token) and self.headers.get("X-Honeycomb-Token") == token
+
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path.rstrip("/") or "/"
+
+        if path.startswith("/control/"):
+            if not self._control_authorized():
+                self._send(401, json.dumps({"error": {"message": "control token required"}}).encode())
+                return
+            raw = self._read_body()
+            try:
+                body = json.loads(raw.decode() or "{}")
+            except json.JSONDecodeError:
+                self._send(400, json.dumps({"error": {"message": "invalid json"}}).encode())
+                return
+            node_id = str(body.get("node") or "")
+            action = path.removeprefix("/control/")
+            if action == "ping":
+                result = fleet_nodes.action_ping(node_id, int(CFG.get("listen_port", 4000)))
+            elif action == "doctor":
+                result = fleet_nodes.action_doctor(node_id)
+            elif action == "container":
+                result = fleet_nodes.action_container(node_id, str(body.get("verb") or ""))
+            else:
+                self._send(404, json.dumps({"error": {"message": f"unknown action {action}"}}).encode())
+                return
+            log(f"control {action} node={node_id!r} ok={result.get('ok')}")
+            self._send(200, json.dumps(result).encode())
+            return
+
         if path not in (
             "/v1/chat/completions",
             "/v1/completions",

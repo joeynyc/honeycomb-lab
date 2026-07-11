@@ -2,7 +2,11 @@
   "listen_host": "0.0.0.0",
   "listen_port": 4000,
   "default_model": "spark-peer",
-  "cheap_order": ["lms", "gx10", "joeydgx"],
+  "cheap_order": [
+    "lms",
+    "gx10",
+    "joeydgx"
+  ],
   "backends": {
     "gx10": {
       "name": "gx10 (peer Spark)",
@@ -21,10 +25,26 @@
     }
   },
   "aliases": {
-    "spark-peer": { "backend": "gx10", "upstream_model": null },
-    "spark-main": { "backend": "joeydgx", "upstream_model": null },
-    "pc-4080": { "backend": "lms", "upstream_model": null },
-    "local-lms": { "backend": "lms", "upstream_model": null },
-    "default": { "backend": "gx10", "upstream_model": null }
-  }
+    "spark-peer": {
+      "backend": "gx10",
+      "upstream_model": null
+    },
+    "spark-main": {
+      "backend": "joeydgx",
+      "upstream_model": null
+    },
+    "pc-4080": {
+      "backend": "lms",
+      "upstream_model": null
+    },
+    "local-lms": {
+      "backend": "lms",
+      "upstream_model": null
+    },
+    "default": {
+      "backend": "gx10",
+      "upstream_model": null
+    }
+  },
+  "control_token": "c6123b3eaf8bc21888246d8d92787325"
 }

@@ -168,6 +168,38 @@
     padding: 3px 7px; border-radius: 3px; margin: 2px 3px 2px 0;
   }
 
+  /* ---------- Trend sparkline ---------- */
+  .trend-row {
+    padding: 7px 0; border-bottom: 1px solid rgba(51,77,51,.5);
+  }
+  .trend-row .k { display: block; margin-bottom: 4px; }
+  .sparkline { display: block; width: 100%; height: 18px; }
+
+  /* ---------- Control buttons ---------- */
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .chip-btn {
+    background: none; border: 1px solid var(--stroke); color: var(--text);
+    font-family: inherit; font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+    padding: 8px 12px; min-height: 44px; min-width: 44px;
+    border-radius: 4px; cursor: pointer;
+  }
+  .chip-btn:disabled { opacity: .5; cursor: default; }
+  .chip-btn.green { color: var(--green); border-color: var(--green-dim); }
+  .chip-btn.red { color: var(--red); border-color: var(--red); }
+
+  /* ---------- Action results / doctor findings ---------- */
+  .result-block { margin-top: 10px; }
+  .result-line { padding: 4px 0; font-size: 11px; color: var(--text); overflow-wrap: anywhere; }
+  .result-line.err { color: var(--red); }
+  .result-line.muted { color: var(--muted); }
+  .finding { padding: 5px 0; border-bottom: 1px solid rgba(51,77,51,.3); }
+  .finding:last-child { border-bottom: none; }
+  .finding-title { display: flex; gap: 6px; align-items: baseline; font-size: 11px; }
+  .finding-glyph.crit { color: var(--red); }
+  .finding-glyph.warn { color: var(--amber); }
+  .finding-glyph.info { color: var(--muted); }
+  .finding-action { font-size: 10px; color: var(--muted); margin: 2px 0 0 16px; }
+
   /* ---------- Traffic feed ---------- */
   #traffic {
     flex: 0 0 auto;
@@ -376,6 +408,64 @@
     var d = new Date(ts * 1000);
     var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
     return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function relTime(ts) {
+    if (!ts) return null;
+    var diff = Math.max(0, Date.now() / 1000 - ts);
+    if (diff < 60) return Math.round(diff) + "s ago";
+    if (diff < 3600) return Math.round(diff / 60) + "m ago";
+    if (diff < 86400) return Math.round(diff / 3600) + "h ago";
+    return Math.round(diff / 86400) + "d ago";
+  }
+
+  // ---------- Control-plane auth (token-guarded /control/* endpoints) ----------
+  function getToken() {
+    try { return localStorage.getItem("hc-token"); } catch (e) { return null; }
+  }
+  function setToken(t) {
+    try { localStorage.setItem("hc-token", t); } catch (e) {}
+  }
+  function withAuthHeaders(headers) {
+    var h = {};
+    for (var k in headers) { if (Object.prototype.hasOwnProperty.call(headers, k)) h[k] = headers[k]; }
+    var token = getToken();
+    if (token) h["X-Honeycomb-Token"] = token;
+    return h;
+  }
+  // fetch wrapper: attaches the stored token header, and on 401 prompts once for a
+  // token, stores it, and retries the request a single time.
+  function apiFetch(url, opts) {
+    opts = opts || {};
+    var baseHeaders = opts.headers || {};
+    var fetchOpts = {};
+    for (var k in opts) { if (Object.prototype.hasOwnProperty.call(opts, k)) fetchOpts[k] = opts[k]; }
+    fetchOpts.headers = withAuthHeaders(baseHeaders);
+    return fetch(url, fetchOpts).then(function (r) {
+      if (r.status === 401) {
+        var entered = prompt("Honeycomb control token required:");
+        if (entered) {
+          setToken(entered);
+          var retryOpts = {};
+          for (var k2 in opts) { if (Object.prototype.hasOwnProperty.call(opts, k2)) retryOpts[k2] = opts[k2]; }
+          retryOpts.headers = withAuthHeaders(baseHeaders);
+          return fetch(url, retryOpts);
+        }
+      }
+      return r;
+    });
+  }
+  function postControl(path, body) {
+    return apiFetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return null; }).then(function (data) {
+        if (!data) data = { ok: false, error: "HTTP " + r.status };
+        return { status: r.status, data: data };
+      });
+    });
   }
 
   // ---------- Rendering: map ----------
@@ -656,6 +746,162 @@
     return wrap;
   }
 
+  function buildSparkline(series) {
+    var w = 120, h = 18;
+    var vals = series.filter(function (v) { return v > 0; });
+    var max = vals.length ? Math.max.apply(null, vals) : 1;
+    var n = series.length;
+    var pts = series.map(function (v, i) {
+      var x = n > 1 ? (i / (n - 1)) * w : 0;
+      var y = h - (v > 0 ? (v / max) * h : 0);
+      return x.toFixed(1) + "," + y.toFixed(1);
+    }).join(" ");
+    var s = svgEl("svg", { viewBox: "0 0 " + w + " " + h, "class": "sparkline", preserveAspectRatio: "none" });
+    s.appendChild(svgEl("polyline", { points: pts, fill: "none", stroke: "#4A8C2E", "stroke-width": "1.5" }));
+    return s;
+  }
+
+  function renderFindings(container, findings, errorMsg) {
+    container.innerHTML = "";
+    if (errorMsg) {
+      var errLine = document.createElement("div");
+      errLine.className = "result-line err";
+      errLine.textContent = errorMsg;
+      container.appendChild(errLine);
+      return;
+    }
+    if (!findings || !findings.length) {
+      var okLine = document.createElement("div");
+      okLine.className = "result-line";
+      okLine.style.color = "var(--green-dim)";
+      okLine.textContent = "● all clear — no findings";
+      container.appendChild(okLine);
+      return;
+    }
+    findings.slice(0, 4).forEach(function (f) {
+      var glyph = f.severity === "critical" ? "✖" : (f.severity === "warning" ? "◐" : "·");
+      var gClass = f.severity === "critical" ? "crit" : (f.severity === "warning" ? "warn" : "info");
+      var block = document.createElement("div");
+      block.className = "finding";
+      var titleRow = document.createElement("div");
+      titleRow.className = "finding-title";
+      var g = document.createElement("span");
+      g.className = "finding-glyph " + gClass;
+      g.textContent = glyph;
+      var t = document.createElement("span");
+      t.textContent = f.title || f.ruleID || "";
+      titleRow.appendChild(g);
+      titleRow.appendChild(t);
+      block.appendChild(titleRow);
+      if (f.action) {
+        var act = document.createElement("div");
+        act.className = "finding-action";
+        act.textContent = "→ " + f.action;
+        block.appendChild(act);
+      }
+      container.appendChild(block);
+    });
+    if (findings.length > 4) {
+      var more = document.createElement("div");
+      more.className = "result-line muted";
+      more.textContent = "+" + (findings.length - 4) + " more";
+      container.appendChild(more);
+    }
+  }
+
+  function chipButton(label, busy, onClick, variant) {
+    var btn = document.createElement("button");
+    btn.className = "chip-btn" + (variant ? " " + variant : "");
+    btn.textContent = label;
+    btn.disabled = !!busy;
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  // ---------- Node control actions (ping / doctor / serve / stop) ----------
+  var actionState = {}; // node id -> {pingBusy,pingResult,doctorBusy,doctorResult,ctrlBusy,ctrlResult}
+  function getActionState(id) {
+    if (!actionState[id]) actionState[id] = {};
+    return actionState[id];
+  }
+
+  function refreshInspectorIfOpen(id) {
+    if (state.inspectorOpen && state.selectedId === id) {
+      var node = findNodeById(id);
+      if (node) renderInspector(node);
+    }
+  }
+
+  function doPing(id) {
+    var as = getActionState(id);
+    if (as.pingBusy) return;
+    as.pingBusy = true;
+    refreshInspectorIfOpen(id);
+    postControl("/control/ping", { node: id }).then(function (res) {
+      as.pingBusy = false;
+      as.pingResult = res.data || { ok: false, error: "no response" };
+      refreshInspectorIfOpen(id);
+    }).catch(function () {
+      as.pingBusy = false;
+      as.pingResult = { ok: false, error: "network error" };
+      refreshInspectorIfOpen(id);
+    });
+  }
+
+  function doDoctor(id) {
+    var as = getActionState(id);
+    if (as.doctorBusy) return;
+    as.doctorBusy = true;
+    refreshInspectorIfOpen(id);
+    postControl("/control/doctor", { node: id }).then(function (res) {
+      as.doctorBusy = false;
+      as.doctorResult = res.data || { ok: false, error: "no response" };
+      refreshInspectorIfOpen(id);
+    }).catch(function () {
+      as.doctorBusy = false;
+      as.doctorResult = { ok: false, error: "network error" };
+      refreshInspectorIfOpen(id);
+    });
+  }
+
+  function doContainer(id, verb, nodeName) {
+    if (!confirm((verb === "start" ? "Start" : "Stop") + " inference container on " + (nodeName || id) + "?")) return;
+    var as = getActionState(id);
+    if (as.ctrlBusy) return;
+    as.ctrlBusy = true;
+    refreshInspectorIfOpen(id);
+    postControl("/control/container", { node: id, verb: verb }).then(function (res) {
+      as.ctrlBusy = false;
+      as.ctrlResult = res.data || { ok: false, error: "no response" };
+      refreshInspectorIfOpen(id);
+      // node state (inferenceOK etc) refreshes on the next regular /nodes poll
+    }).catch(function () {
+      as.ctrlBusy = false;
+      as.ctrlResult = { ok: false, error: "network error" };
+      refreshInspectorIfOpen(id);
+    });
+  }
+
+  function buildButtonRow(node) {
+    var as = getActionState(node.id);
+    var row = document.createElement("div");
+    row.className = "btn-row";
+
+    if (node.canPing) {
+      row.appendChild(chipButton(as.pingBusy ? "PING…" : "PING", as.pingBusy, function () { doPing(node.id); }));
+    }
+    if (node.canDoctor) {
+      row.appendChild(chipButton(as.doctorBusy ? "DOCTOR…" : "DOCTOR", as.doctorBusy, function () { doDoctor(node.id); }));
+    }
+    if (node.canControl && !node.inferenceOK) {
+      row.appendChild(chipButton(as.ctrlBusy ? "SERVE…" : "SERVE", as.ctrlBusy, function () { doContainer(node.id, "start", node.name); }, "green"));
+    }
+    if (node.canControl && node.inferenceOK) {
+      row.appendChild(chipButton(as.ctrlBusy ? "STOP…" : "STOP", as.ctrlBusy, function () { doContainer(node.id, "stop", node.name); }, "red"));
+    }
+    return row;
+  }
+
   function renderInspector(node) {
     if (!node) return;
     inspName.textContent = node.name || node.id;
@@ -680,6 +926,21 @@
     addRow("PATH", node.pathBadge || "—");
     addRow("DETAIL", node.detail || "—");
     addRow("LATENCY", node.latencyMs != null ? Math.round(node.latencyMs) + " ms" : "—");
+
+    if (node.latencySeries && node.latencySeries.length > 4 && node.latencySeries.some(function (v) { return v > 0; })) {
+      var trendRow = document.createElement("div");
+      trendRow.className = "trend-row";
+      var trendK = document.createElement("span");
+      trendK.className = "k";
+      trendK.textContent = "TREND";
+      trendRow.appendChild(trendK);
+      trendRow.appendChild(buildSparkline(node.latencySeries));
+      inspBody.appendChild(trendRow);
+    }
+
+    if (node.lastChange) {
+      addRow("CHANGED", relTime(node.lastChange));
+    }
 
     var m = node.metrics;
     if (m) {
@@ -718,6 +979,56 @@
       });
       mWrap.appendChild(listWrap);
       inspBody.appendChild(mWrap);
+    }
+
+    // ---- Control buttons ----
+    var as = getActionState(node.id);
+    if (node.canPing || node.canDoctor || node.canControl) {
+      inspBody.appendChild(buildButtonRow(node));
+    }
+
+    // ---- PING result ----
+    if (as.pingResult) {
+      var pr = as.pingResult;
+      var pline = document.createElement("div");
+      pline.className = "result-line" + (pr.ok === false ? " err" : "");
+      if (pr.ok === false) {
+        pline.textContent = "PING ✖ " + (pr.error || "failed");
+      } else {
+        var parts = [];
+        if (pr.ms != null) parts.push(Math.round(pr.ms) + " ms");
+        if (pr.tokPerSec != null) parts.push(pr.tokPerSec.toFixed(1) + " tok/s");
+        if (pr.snippet) parts.push("“" + pr.snippet + "”");
+        pline.textContent = "PING " + parts.join(" · ");
+      }
+      inspBody.appendChild(pline);
+    }
+
+    // ---- CTRL (serve/stop) result ----
+    if (as.ctrlResult) {
+      var cr = as.ctrlResult;
+      var cline = document.createElement("div");
+      cline.className = "result-line" + (cr.ok === false ? " err" : "");
+      cline.textContent = "CTRL " + (cr.ok === false ? (cr.error || "failed") : (cr.message || "ok"));
+      inspBody.appendChild(cline);
+    }
+
+    // ---- DOCTOR report (from a manual run, or the latest auto-run surfaced via /nodes) ----
+    var doctorReport = as.doctorResult || node.doctor;
+    if (as.doctorResult && node.doctor && (node.doctor.ts || 0) > (as.doctorResult.ts || 0)) {
+      doctorReport = node.doctor;
+    }
+    if (doctorReport) {
+      var docWrap = document.createElement("div");
+      docWrap.className = "result-block";
+      var docLabel = document.createElement("span");
+      docLabel.className = "k";
+      docLabel.textContent = "DOCTOR" + (doctorReport.ts ? " · " + relTime(doctorReport.ts) : "");
+      docWrap.appendChild(docLabel);
+      var findingsWrap = document.createElement("div");
+      renderFindings(findingsWrap, doctorReport.findings, doctorReport.error);
+      docWrap.appendChild(findingsWrap);
+      inspBody.appendChild(docWrap);
     }
   }
 

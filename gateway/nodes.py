@@ -30,7 +30,13 @@ SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "ConnectionAt
 _lock = threading.Lock()
 _fleet: dict[str, Any] = {"title": "HONEYCOMB", "nodes": [], "links": []}
 _status: dict[str, dict[str, Any]] = {}
+# node_id -> deque[(ts, health, latencyMs)] — rolling hour
+_history: dict[str, Any] = {}
+_last_change: dict[str, float] = {}
+# node_id -> last doctor report {ts, findings, error}
+_doctor: dict[str, dict[str, Any]] = {}
 _pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="node-probe")
+HISTORY_WINDOW_SEC = 3600
 
 
 def _lms_path() -> str | None:
@@ -168,6 +174,7 @@ def _probe_vllm_ssh(node: dict[str, Any]) -> dict[str, Any]:
     return {
         "health": health,
         "models": models,
+        "inferenceOK": infer_ok,
         "detail": " · ".join(parts) if parts else "unreachable",
         "latencyMs": latency,
         "metrics": metrics,
@@ -181,6 +188,7 @@ def _probe_lmstudio_hub(node: dict[str, Any]) -> dict[str, Any]:
     return {
         "health": "online",  # the hub runs this gateway
         "models": chat_models,
+        "inferenceOK": infer_ok,
         "detail": "hub · " + ("lms :1234" if infer_ok else "LM Studio server off"),
         "latencyMs": latency,
         "metrics": None,
@@ -209,6 +217,7 @@ def _probe_lmlink_peer(node: dict[str, Any]) -> dict[str, Any]:
     return {
         "health": health,
         "models": loaded,
+        "inferenceOK": link_ok,
         "detail": (f"lm-link · {peer}" if link_ok else f"{peer} not in link mesh")
         + (f" · {len(loaded)} loaded" if loaded else ""),
         "latencyMs": None,
@@ -222,6 +231,7 @@ def _probe_http_only(node: dict[str, Any]) -> dict[str, Any]:
     return {
         "health": "online" if infer_ok else "offline",
         "models": models,
+        "inferenceOK": infer_ok,
         "detail": "api" if infer_ok else "API not answering",
         "latencyMs": latency,
         "metrics": None,
@@ -250,8 +260,19 @@ def _probe_one(node: dict[str, Any]) -> None:
             "metrics": None,
             "pathBadge": "?",
         }
+    import collections
+
+    now = time.time()
+    nid = node["id"]
     with _lock:
-        _status[node["id"]] = result
+        prev = _status.get(nid, {}).get("health")
+        if prev is not None and prev != result["health"]:
+            _last_change[nid] = now
+        _status[nid] = result
+        hist = _history.setdefault(nid, collections.deque(maxlen=500))
+        hist.append((now, result["health"], result.get("latencyMs")))
+        while hist and now - hist[0][0] > HISTORY_WINDOW_SEC:
+            hist.popleft()
 
 
 def _refresh_loop() -> None:
@@ -306,6 +327,11 @@ def snapshot(activity: dict[str, Any]) -> dict[str, Any]:
                 lit = True
         if lit:
             st["pathBadge"] = "LIT"
+        with _lock:
+            hist = list(_history.get(nid, []))
+            changed = _last_change.get(nid)
+            doctor_report = _doctor.get(nid)
+        latency_series = [h[2] or 0 for h in hist[-60:]]
         nodes_out.append(
             {
                 "id": nid,
@@ -315,7 +341,112 @@ def snapshot(activity: dict[str, Any]) -> dict[str, Any]:
                 "hub": bool(n.get("hub")),
                 "axial": n.get("axial"),
                 "lit": lit,
+                "latencySeries": latency_series,
+                "lastChange": changed,
+                "doctor": doctor_report,
+                "canPing": bool(n.get("pingAlias")),
+                "canDoctor": bool(n.get("doctorCommand") and n.get("sshHost")),
+                "canControl": bool(n.get("container") and n.get("sshHost")),
                 **st,
             }
         )
     return {"title": fleet["title"], "links": fleet["links"], "nodes": nodes_out}
+
+
+# ---------------------------------------------------------------------------
+# Control actions (called by the gateway's POST /control/* routes)
+
+
+def _find_node(node_id: str) -> dict[str, Any] | None:
+    with _lock:
+        for n in _fleet["nodes"]:
+            if n.get("id") == node_id:
+                return dict(n)
+    return None
+
+
+def action_ping(node_id: str, gateway_port: int) -> dict[str, Any]:
+    """One-shot prompt through the gateway using the node's alias."""
+    import urllib.request
+
+    node = _find_node(node_id)
+    if not node or not node.get("pingAlias"):
+        return {"ok": False, "error": "node has no pingAlias"}
+    body = json.dumps(
+        {
+            "model": node["pingAlias"],
+            "messages": [{"role": "user", "content": "Reply with the single word: pong"}],
+            "max_tokens": 256,
+            "stream": False,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{gateway_port}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    t0 = time.perf_counter()
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read().decode())
+        ms = (time.perf_counter() - t0) * 1000
+        msg = (data.get("choices") or [{}])[0].get("message") or {}
+        content = (msg.get("content") or msg.get("reasoning") or "").strip()
+        toks = (data.get("usage") or {}).get("completion_tokens")
+        return {
+            "ok": True,
+            "ms": round(ms),
+            "tokPerSec": round(toks / (ms / 1000), 1) if toks and ms > 0 else None,
+            "snippet": content[:60],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+def action_doctor(node_id: str) -> dict[str, Any]:
+    """Run the node's doctorCommand over SSH; cache and return the report."""
+    node = _find_node(node_id)
+    if not node or not (node.get("doctorCommand") and node.get("sshHost")):
+        return {"ok": False, "error": "node has no doctorCommand"}
+    code, out = _run(
+        ["ssh", *SSH_OPTS, node["sshHost"], node["doctorCommand"]], timeout=120
+    )
+    report: dict[str, Any] = {"ts": time.time(), "findings": [], "error": None}
+    try:
+        data = json.loads(out)
+        for f in data.get("findings", []):
+            report["findings"].append(
+                {
+                    "ruleID": f.get("rule_id", "?"),
+                    "title": f.get("title", ""),
+                    "severity": f.get("severity", "info"),
+                    "action": (f.get("recommended_actions") or [""])[0],
+                }
+            )
+    except Exception:
+        report["error"] = f"doctor failed (exit {code})"
+    with _lock:
+        _doctor[node_id] = report
+    return {"ok": report["error"] is None, **report}
+
+
+def action_container(node_id: str, verb: str) -> dict[str, Any]:
+    """docker start/stop of the node's configured container over SSH."""
+    if verb not in ("start", "stop"):
+        return {"ok": False, "error": "verb must be start or stop"}
+    node = _find_node(node_id)
+    if not node or not (node.get("container") and node.get("sshHost")):
+        return {"ok": False, "error": "node has no container"}
+    code, out = _run(
+        ["ssh", *SSH_OPTS, node["sshHost"], "docker", verb, node["container"]],
+        timeout=60 if verb == "stop" else 40,
+    )
+    if code == 0:
+        msg = (
+            "container starting — model load takes a few minutes"
+            if verb == "start"
+            else "container stopped"
+        )
+        return {"ok": True, "message": msg}
+    return {"ok": False, "error": f"{verb} failed (exit {code}) {out.strip()[:120]}"}
