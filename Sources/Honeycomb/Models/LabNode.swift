@@ -42,6 +42,21 @@ enum NodeHealth: String, Sendable {
     }
 }
 
+/// Live utilization for a node (DGX Sparks; unified memory on GB10, so
+/// system memory *is* GPU memory).
+struct NodeMetrics: Equatable, Sendable {
+    var gpuUtilPct: Int?
+    var memUsedMB: Int?
+    var memTotalMB: Int?
+    /// vLLM KV-cache usage 0–100
+    var kvCachePct: Double?
+    var runningRequests: Int?
+    /// Computed from vLLM's generation_tokens_total counter between polls
+    var genTokPerSec: Double?
+    /// Raw counter used for the delta
+    var genTokensTotal: Double?
+}
+
 struct LabNode: Identifiable, Sendable, Equatable {
     let id: String
     var name: String
@@ -63,6 +78,7 @@ struct LabNode: Identifiable, Sendable, Equatable {
 
     var health: NodeHealth = .unknown
     var latencyMs: Double?
+    var metrics: NodeMetrics?
     /// Only *loaded / serving* models — never a full catalog dump
     var models: [String] = []
     var lastChecked: Date?
@@ -140,6 +156,7 @@ struct LabNode: Identifiable, Sendable, Equatable {
         lhs.id == rhs.id
             && lhs.health == rhs.health
             && lhs.latencyMs == rhs.latencyMs
+            && lhs.metrics == rhs.metrics
             && lhs.models == rhs.models
             && lhs.lastError == rhs.lastError
             && lhs.isStreaming == rhs.isStreaming

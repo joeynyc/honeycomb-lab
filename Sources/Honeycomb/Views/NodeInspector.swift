@@ -91,6 +91,27 @@ struct NodeInspector: View {
             if let ms = node.latencyMs {
                 row("LATENCY", String(format: "%.0f ms", ms))
             }
+            if let m = node.metrics {
+                if let gpu = m.gpuUtilPct {
+                    metricRow("GPU", "\(gpu)%", fraction: Double(gpu) / 100)
+                }
+                if let used = m.memUsedMB, let total = m.memTotalMB, total > 0 {
+                    metricRow(
+                        "MEM",
+                        String(format: "%.0f / %.0f GB", Double(used) / 1024, Double(total) / 1024),
+                        fraction: Double(used) / Double(total)
+                    )
+                }
+                if let kv = m.kvCachePct {
+                    metricRow("KV CACHE", String(format: "%.0f%%", kv), fraction: kv / 100)
+                }
+                if let running = m.runningRequests, running > 0 {
+                    row("ACTIVE", "\(running) request\(running == 1 ? "" : "s")")
+                }
+                if let tps = m.genTokPerSec, tps > 0.05 {
+                    row("THRUPUT", String(format: "%.1f tok/s", tps))
+                }
+            }
             if let err = node.lastError {
                 row("NOTE", err)
             }
@@ -164,6 +185,31 @@ struct NodeInspector: View {
         }
         .onChange(of: node.id) { _, _ in
             ping.clear()
+        }
+    }
+
+    /// Key/value row with a thin utilization bar under the value.
+    private func metricRow(_ k: String, _ v: String, fraction: Double) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(k)
+                .font(LabTheme.monoTiny)
+                .foregroundStyle(LabTheme.textMuted)
+                .frame(width: 64, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(v)
+                    .font(LabTheme.monoSmall)
+                    .foregroundStyle(LabTheme.text)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(LabTheme.strokeDim)
+                        Capsule()
+                            .fill(fraction > 0.85 ? LabTheme.amber : LabTheme.phosphorDim)
+                            .frame(width: max(2, geo.size.width * min(1, max(0, fraction))))
+                    }
+                }
+                .frame(height: 3)
+            }
         }
     }
 

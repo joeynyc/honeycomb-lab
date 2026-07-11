@@ -13,6 +13,8 @@ final class HealthMonitor {
     var selectedNodeID: String?
 
     private var pollTask: Task<Void, Never>?
+    /// Last seen vLLM generation-token counter per node, for tok/s deltas
+    private var lastGenTokens: [String: (Date, Double)] = [:]
     private let session: URLSession
     private let pollInterval: Duration
     private let gatewayURL = URL(string: "http://127.0.0.1:4000/health")!
@@ -91,9 +93,28 @@ final class HealthMonitor {
             nodes[idx].inferenceOK = result.inferenceOK
             nodes[idx].statusDetail = result.detail
             nodes[idx].lastChecked = Date()
+            nodes[idx].metrics = computeTokRate(id: id, metrics: result.metrics)
             // Lit = gateway saw traffic to this node recently
             nodes[idx].isStreaming = gateway.nodeActivity[id] ?? false
         }
+    }
+
+    /// Turn the raw generation-token counter into tok/s using the previous poll.
+    private func computeTokRate(id: String, metrics: NodeMetrics?) -> NodeMetrics? {
+        guard var m = metrics else {
+            lastGenTokens[id] = nil
+            return nil
+        }
+        if let total = m.genTokensTotal {
+            if let (prevDate, prevTotal) = lastGenTokens[id], total >= prevTotal {
+                let dt = Date().timeIntervalSince(prevDate)
+                if dt > 0.5 {
+                    m.genTokPerSec = (total - prevTotal) / dt
+                }
+            }
+            lastGenTokens[id] = (Date(), total)
+        }
+        return m
     }
 
     private struct GatewaySnapshot: Sendable {
@@ -188,6 +209,29 @@ final class HealthMonitor {
         var dashboardOK: Bool
         var inferenceOK: Bool
         var detail: String
+        var metrics: NodeMetrics?
+
+        init(
+            health: NodeHealth,
+            latencyMs: Double?,
+            models: [String],
+            error: String?,
+            sshOK: Bool,
+            dashboardOK: Bool,
+            inferenceOK: Bool,
+            detail: String,
+            metrics: NodeMetrics? = nil
+        ) {
+            self.health = health
+            self.latencyMs = latencyMs
+            self.models = models
+            self.error = error
+            self.sshOK = sshOK
+            self.dashboardOK = dashboardOK
+            self.inferenceOK = inferenceOK
+            self.detail = detail
+            self.metrics = metrics
+        }
     }
 
     private nonisolated static func modelsURL(for node: LabNode) -> URL {
@@ -388,6 +432,66 @@ final class HealthMonitor {
         return found
     }
 
+    /// GPU util + unified memory over SSH — one spawn, cached.
+    /// GB10 nvidia-smi reports memory as N/A, so system memory is the truth.
+    private nonisolated static func fetchHardwareMetrics(host: String) async -> NodeMetrics? {
+        let cmd = "free -m | awk '/^Mem:/{print $3, $2}'; "
+            + "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits"
+        let result = await CommandCache.shared.value(key: "hw:\(host)", ttl: 8) {
+            await runCommand(
+                "/usr/bin/ssh",
+                ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, cmd],
+                timeout: 6
+            )
+        }
+        guard let result, result.status == 0 else { return nil }
+        let lines = result.output.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var metrics = NodeMetrics()
+        if let memLine = lines.first {
+            let parts = memLine.split(separator: " ").compactMap { Int($0) }
+            if parts.count == 2 {
+                metrics.memUsedMB = parts[0]
+                metrics.memTotalMB = parts[1]
+            }
+        }
+        if lines.count > 1, let util = Int(lines[1]) {
+            metrics.gpuUtilPct = util
+        }
+        return metrics
+    }
+
+    /// Parse the handful of vLLM Prometheus gauges the map cares about.
+    private nonisolated static func fetchVLLMMetrics(
+        node: LabNode,
+        session: URLSession
+    ) async -> (kvCachePct: Double?, running: Int?, genTotal: Double?) {
+        guard let url = URL(string: node.baseURL.absoluteString + "/metrics") else {
+            return (nil, nil, nil)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 3
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let text = String(data: data, encoding: .utf8)
+        else { return (nil, nil, nil) }
+
+        func value(_ metric: String) -> Double? {
+            for line in text.components(separatedBy: .newlines)
+            where line.hasPrefix(metric) {
+                if let raw = line.split(separator: " ").last {
+                    return Double(raw)
+                }
+            }
+            return nil
+        }
+        let kv = value("vllm:kv_cache_usage_perc").map { $0 * 100 }
+        let running = value("vllm:num_requests_running").map { Int($0) }
+        let genTotal = value("vllm:generation_tokens_total")
+        return (kv, running, genTotal)
+    }
+
     /// JoeyDGX / gx10 — SSH is the ground truth for "is the Spark connected?"
     private nonisolated static func probeDGX(node: LabNode, session: URLSession) async -> ProbeResult {
         let start = ContinuousClock.now
@@ -398,10 +502,19 @@ final class HealthMonitor {
             return await checkHTTPAlive(url: url, session: session)
         }()
         async let inference: (Bool, [String], String?) = checkInference(node: node, session: session)
+        async let hardware: NodeMetrics? = fetchHardwareMetrics(host: node.sshHost!)
 
         let (sshOK, sshErr) = await ssh
         let dashboardOK = await dash
         let (inferenceOK, models, _) = await inference
+        var metrics = await hardware
+        if inferenceOK {
+            let vllm = await fetchVLLMMetrics(node: node, session: session)
+            if metrics == nil { metrics = NodeMetrics() }
+            metrics?.kvCachePct = vllm.kvCachePct
+            metrics?.runningRequests = vllm.running
+            metrics?.genTokensTotal = vllm.genTotal
+        }
 
         let elapsed = start.duration(to: .now)
         let latency = Double(elapsed.components.seconds) * 1000
@@ -455,7 +568,8 @@ final class HealthMonitor {
             sshOK: sshOK,
             dashboardOK: dashboardOK,
             inferenceOK: inferenceOK,
-            detail: detail
+            detail: detail,
+            metrics: hostUp ? metrics : nil
         )
     }
 
