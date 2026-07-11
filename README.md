@@ -1,143 +1,135 @@
 # Honeycomb Lab
 
-Personal macOS control plane + OpenAI gateway for Joey’s local AI fleet.
+A control plane for your home AI fleet: a phosphor-green hex map of every
+GPU box you own, plus an OpenAI-compatible gateway that routes to all of
+them through one URL — with cost-aware routing, failover, live metrics,
+and one-tap node control. macOS app + web dashboard for iPad/iPhone/any
+browser.
+
+![Honeycomb Lab](docs/minilab.png)
+
+## What it does
+
+- **One API for the whole fleet** — point any OpenAI-compatible client at
+  `http://<hub>:4000/v1` and route by alias to vLLM boxes, LM Studio, or
+  any OpenAI-compatible endpoint. `model: "cheap"` picks the least
+  expensive healthy backend; `model: "any"` adds automatic failover when
+  a backend dies mid-request.
+- **A map that tells the truth** — each node is a hex: outline color is
+  health, hexes go **LIT** with animated pulses when traffic flows through
+  the gateway, and the inspector shows GPU %, unified memory, KV-cache,
+  tok/s, latency trend, and what's actually loaded (never a catalog dump).
+- **Fleet control from the map** — PING (one-shot prompt through the real
+  wire), SERVE/STOP (docker start/stop of a node's inference container
+  over SSH, with confirmation), and DOCTOR
+  ([spark-doctor](https://github.com/joeynyc/spark-doctor) diagnostics,
+  auto-run when a node fails so the "why" is waiting for you).
+- **Works everywhere** — native macOS app (menu bar + notifications) and
+  a self-contained web dashboard served by the gateway itself: open it on
+  an iPad/iPhone, Add to Home Screen, and control the fleet from anywhere
+  (pairs perfectly with Tailscale).
 
 ## Architecture
 
 ```
-Cursor / Hermes / apps
-        │
-        ▼
-  Mac mini :4000   ← gateway (this repo)
-        │
-   ┌────┼────────────┐
-   ▼    ▼            ▼
- gx10  JoeyDGX    LM Studio
- peer  main       + LM Link → PC 4080
+ any OpenAI-compatible client
+            │
+            ▼
+      hub :4000  ← gateway (Python, stdlib only)
+            │
+   ┌────────┼──────────────┐
+   ▼        ▼              ▼
+ vLLM     vLLM        LM Studio (+ LM Link peers)
+ box A    box B       on the hub
 ```
 
-## Run the map (SwiftUI app)
+The hub is the Mac that runs the gateway and the app. Everything the
+system believes about your fleet lives in one file: `fleet.json`.
 
-Installed app (real bundle, proper dock icon):
+## Quickstart
+
+Requirements: macOS 14+ on the hub (Swift 6 toolchain for the app),
+Python 3.11+, SSH keys to your GPU boxes. Optional per feature: vLLM on
+the GPU boxes, LM Studio + LM Link, Docker (for SERVE/STOP),
+spark-doctor (for DOCTOR).
 
 ```bash
-open /Applications/Honeycomb.app
+git clone <this repo> && cd honeycomb-lab
+
+# 1. Gateway: describe your backends
+cp gateway/config.example.json gateway/config.json   # edit IPs/aliases
+cd gateway && ./start.sh                             # → http://0.0.0.0:4000
+
+# 2. App (first launch copies the bundled fleet to
+#    ~/Library/Application Support/Honeycomb/fleet.json — edit it there)
+./Scripts/compile_and_run.sh          # builds + packages + launches
+cp -R Honeycomb.app /Applications/    # keep a real install
+
+# 3. Web dashboard — already live: open http://<hub-ip>:4000 in a browser
 ```
 
-Rebuild + repackage + relaunch after code changes:
+To run the gateway as a service (start at login, restart on crash), see
+`docs/launchd.md` pattern in the launchctl comments of `gateway/start.sh`,
+or create a LaunchAgent that runs `gateway/start.sh`.
 
-```bash
-cd ~/dev/Honeycomb
-./Scripts/compile_and_run.sh          # packages Honeycomb.app and launches it
-cp -R Honeycomb.app /Applications/    # refresh the installed copy
-```
+## The gateway
 
-Dev loop without packaging (generic dock icon):
+| Model id | Routes to |
+|----------|-----------|
+| `cheap` | Cheapest healthy backend with a chat model loaded (`cheap_order` in config) |
+| `any` | Like `cheap`, plus automatic failover to the next backend on upstream errors |
+| *your aliases* | Whatever you define in `config.json` (e.g. `spark-main` → box A's vLLM) |
+| `backend/<model>` | Explicit model on an explicit backend |
 
-```bash
-swift run Honeycomb
-```
+Any alias can opt into failover per-request with `"failover": true`.
+Aliases with no pinned model auto-pick the backend's first chat-capable
+model (embedding models are skipped).
 
-## Run the gateway (API)
+Endpoints: `/v1/chat/completions` · `/v1/completions` · `/v1/embeddings`
+(all proxied, stream + non-stream) · `/health` (backends, activity,
+stats) · `/nodes` (fleet status for the dashboard) · `/requests` (recent
+traffic) · `/control/*` (ping / doctor / container — see security below).
 
-The gateway runs automatically via launchd (`~/Library/LaunchAgents/com.joeyrodriguez.honeycomb-gateway.plist`):
-starts at login, restarts if it dies, logs to `~/Library/Logs/honeycomb-gateway.log`.
+## fleet.json
 
-```bash
-# manage the service
-launchctl kickstart -k gui/$UID/com.joeyrodriguez.honeycomb-gateway   # restart (e.g. after config.json edits)
-launchctl bootout gui/$UID/com.joeyrodriguez.honeycomb-gateway        # stop
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.joeyrodriguez.honeycomb-gateway.plist  # start again
-
-# manual run (only if the service is stopped)
-cd ~/dev/Honeycomb/gateway && ./start.sh
-# → http://127.0.0.1:4000/v1
-```
-
-Honeycomb.app is also a **login item** — the map and the wire both come up on their own after a reboot.
-
-| Alias | Backend |
-|-------|---------|
-| `spark-peer` (default) | gx10 vLLM |
-| `spark-main` | JoeyDGX vLLM (when up) |
-| `pc-4080` / `local-lms` | LM Studio on Mini (LM Link to ZeroCool) |
-
-```bash
-curl -s http://127.0.0.1:4000/health | jq
-curl -s http://127.0.0.1:4000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"spark-peer","messages":[{"role":"user","content":"hi"}],"max_tokens":64}'
-```
-
-**Cursor / OpenAI-compatible tools:** base URL `http://127.0.0.1:4000/v1`, any API key.
-
-## Nodes (truth)
-
-| Node | Role | Connection | Inference |
-|------|------|------------|-----------|
-| JoeyDGX | Main Spark | NVIDIA Sync SSH | vLLM `:8000` when serving |
-| gx10 | Peer Spark | Sync SSH | vLLM (e.g. Qwen3.6-35B NVFP4) |
-| Mac mini | Hub | This machine | LM Studio `:1234` |
-| PC 4080 | Desktop GPU | LM Link peer ZeroCool | Load model on PC |
-
-## Map features
-
-- **Metrics** (Spark nodes): GPU %, unified memory, vLLM KV-cache, active
-  requests, tok/s — inspector bars go amber above 85%.
-- **TRAFFIC feed**: last gateway requests (alias, model, tokens, duration)
-  under the map; FEED toggle in the top bar.
-- **History**: hour of health+latency per node (TREND sparkline, CHANGED row),
-  persisted to `~/Library/Application Support/Honeycomb/history.json`.
-  macOS notification when a node goes offline / comes back.
-- **SERVE / STOP** (Spark nodes): start/stop the node's inference Docker
-  container over SSH, with confirmation. Container names in
-  `~/Library/Application Support/Honeycomb/control.json`.
-
-## PING diagnostic
-
-Select a hex → **PING** in the inspector. Fires one tiny prompt through the
-gateway using that node's alias and shows latency · tok/s · response snippet
-inline. Rides the same wire as real clients, so the hex goes LIT — a one-click
-self-test of gateway + backend + model.
-
-## Node “LIT” (traffic pulse)
-
-When something (OMP, Cursor, curl) hits the **gateway**, Honeycomb lights the hex that received traffic for ~8s:
-
-```bash
-# Peer Spark lights up
-curl -s http://127.0.0.1:4000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"spark-peer","messages":[{"role":"user","content":"hi"}],"max_tokens":16}'
-```
-
-Direct hits to gx10 `:8000` (bypassing the gateway) will **not** light the map.
-
-## Notes
-
-- JoeyDGX is **main**; gx10 is **peer**.
-- Gateway is stdlib Python only (no pip deps).
-- Daily loop: **map (Honeycomb)** + **wire (gateway :4000)** + **agent (OMP/Cursor)**.
-
-## Use with your own fleet
-
-Node definitions live in `~/Library/Application Support/Honeycomb/fleet.json` (created from the bundled default on first launch; edit it and relaunch). Copy `fleet.example.json` as a starting point.
+Nodes are described in `~/Library/Application Support/Honeycomb/fleet.json`
+(created from the bundled default on first launch; `HONEYCOMB_FLEET` env
+var overrides the path). Start from `fleet.example.json`.
 
 **Probe types:**
-- `vllm-ssh` — GPU box running vLLM, SSH reachability = online.
-- `lmstudio-hub` — the Mac running the app, serving via LM Studio.
-- `lmlink-peer` — a remote GPU reached through the hub's LM Studio via LM Link; set `lmLinkPeer` to the peer's device name.
-- `http-only` — any OpenAI-compatible endpoint.
+- `vllm-ssh` — a GPU box running vLLM; SSH reachability = online, metrics
+  via `nvidia-smi`/`free`, throughput via vLLM's `/metrics`.
+- `lmstudio-hub` — the hub itself, serving via LM Studio.
+- `lmlink-peer` — a remote GPU reached through the hub's LM Studio via
+  LM Link (`lmLinkPeer` = the peer's device name).
+- `http-only` — any OpenAI-compatible endpoint, health by HTTP only.
 
-**Fields:** `gatewayBackend` / `pingAlias` map nodes to backends in `gateway/config.json` so hexes light on traffic; `container` enables SERVE/STOP over SSH (docker start/stop); `hub: true` marks the center node; axial `[q,r]` optionally pins map position; `links` adds extra edges. The gateway's backends/aliases are configured separately in `gateway/config.json`.
+**Per-node fields:** `gatewayBackend` + `litAliases` map the node to a
+gateway backend so its hex lights on traffic; `pingAlias` enables PING;
+`container` (+ `sshHost`) enables SERVE/STOP; `doctorCommand` enables
+DOCTOR; `hub: true` marks the center node; `axial: [q, r]` pins the map
+position; top-level `links` adds extra edges between nodes.
 
-Set `HONEYCOMB_FLEET` env var to override the fleet file path.
+## Web dashboard
 
-## Web dashboard (iPad / any browser)
+Served by the gateway at `/` for browsers (API clients still get JSON).
+Full feature parity: map, LIT pulses, inspector with metrics + latency
+trend, traffic feed, and PING/DOCTOR/SERVE/STOP.
 
-The gateway serves a live honeycomb dashboard at `http://<hub-ip>:4000/`
-(browsers get HTML; API clients still get JSON at `/health`). Same map,
-LIT pulses, node inspector with metrics, and traffic feed — no Mac app
-needed. On iPad/iPhone: open it in Safari → Share → **Add to Home
-Screen** for a full-screen app. Node data comes from `GET /nodes`
-(the gateway probes the fleet itself, reading the same fleet.json).
+**Security:** control actions from anywhere but localhost require the
+`X-Honeycomb-Token` header. Set `control_token` in `gateway/config.json`
+(e.g. `openssl rand -hex 16`); the dashboard prompts once and remembers
+it. The gateway listens LAN-wide by default — keep it on a trusted
+network or a tailnet.
+
+## spark-doctor integration
+
+Give any `vllm-ssh` node a `doctorCommand` that prints a
+[spark-doctor](https://github.com/joeynyc/spark-doctor) scan JSON to
+stdout, and Honeycomb runs it on demand (DOCTOR button) and automatically
+when inference dies or the node drops — findings render right in the
+inspector, and fresh critical findings turn an online hex amber.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

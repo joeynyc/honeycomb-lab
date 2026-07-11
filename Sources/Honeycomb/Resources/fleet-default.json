@@ -1,92 +1,33 @@
 {
-  "title": "HONEYCOMB",
+  "title": "MYLAB",
   "nodes": [
     {
-      "id": "joeydgx",
-      "name": "JoeyDGX",
-      "role": "MAIN SPARK",
-      "shortLabel": "MAIN",
+      "id": "spark1",
+      "name": "Spark One",
+      "role": "DGX SPARK",
+      "shortLabel": "SPARK",
       "probe": "vllm-ssh",
-      "baseURL": "http://192.168.1.15:8000",
-      "hostname": "spark-db08",
-      "address": "192.168.1.15",
-      "sshHost": "JoeyDGX",
-      "dashboardURL": "http://127.0.0.1:11000",
-      "gatewayBackend": "joeydgx",
+      "baseURL": "http://192.168.1.50:8000",
+      "hostname": "spark-abcd",
+      "address": "192.168.1.50",
+      "sshHost": "spark1",
+      "gatewayBackend": "spark1",
       "pingAlias": "spark-main",
-      "container": "nemotron-puzzle-75b",
-      "axial": [
-        -1,
-        0
-      ],
-      "notes": "Primary DGX Spark (GB10). Online = NVIDIA Sync SSH. Models = only what vLLM is serving.",
-      "doctorCommand": "cd ~/projects/spark-doctor && PYTHONPATH=src python3 -c \"from spark_doctor.cli import app; app()\" scan --sample-seconds 2 --no-logs --anonymize --json /tmp/.honeycomb-doctor.json >/dev/null 2>&1; cat /tmp/.honeycomb-doctor.json"
+      "container": "my-vllm-container",
+      "notes": "Online = SSH reachable. Models = whatever vLLM serves."
     },
     {
-      "id": "gx10",
-      "name": "gx10",
-      "role": "PEER SPARK",
-      "shortLabel": "PEER",
-      "probe": "vllm-ssh",
-      "baseURL": "http://192.168.1.192:8000",
-      "hostname": "gx10-3028",
-      "address": "192.168.1.192",
-      "sshHost": "gx10",
-      "gatewayBackend": "gx10",
-      "pingAlias": "spark-peer",
-      "container": "qwen36-35b-nvfp4",
-      "axial": [
-        1,
-        0
-      ],
-      "notes": "Peer Spark. Models = only the active vLLM serve.",
-      "doctorCommand": "cd ~/projects/spark-doctor && PYTHONPATH=src python3 -c \"from spark_doctor.cli import app; app()\" scan --sample-seconds 2 --no-logs --anonymize --json /tmp/.honeycomb-doctor.json >/dev/null 2>&1; cat /tmp/.honeycomb-doctor.json"
-    },
-    {
-      "id": "mini",
-      "name": "Mac mini",
+      "id": "hub",
+      "name": "My Mac",
       "role": "CONTROL PLANE",
       "shortLabel": "HUB",
       "probe": "lmstudio-hub",
       "baseURL": "http://127.0.0.1:1234",
-      "hostname": "Mac-mini",
-      "address": "192.168.1.11",
       "gatewayBackend": "lms",
       "pingAlias": "local-lms",
       "hub": true,
-      "axial": [
-        0,
-        -1
-      ],
-      "notes": "Honeycomb hub. Gateway: http://127.0.0.1:4000/v1 \u00b7 LMS :1234."
-    },
-    {
-      "id": "pc4080",
-      "name": "PC 4080",
-      "role": "DESKTOP GPU",
-      "shortLabel": "4080",
-      "probe": "lmlink-peer",
-      "baseURL": "http://127.0.0.1:1234",
-      "hostname": "ZeroCool",
-      "address": "100.67.238.63",
-      "sshHost": "zerocool",
-      "gatewayBackend": "lms",
-      "litAliases": [
-        "pc-4080"
-      ],
-      "pingAlias": "pc-4080",
-      "lmLinkPeer": "ZeroCool",
-      "axial": [
-        0,
-        1
-      ],
-      "notes": "RTX 4080 via LM Link (peer ZeroCool). Models = loaded on the PC device only."
+      "notes": "The machine Honeycomb runs on."
     }
   ],
-  "links": [
-    [
-      "joeydgx",
-      "gx10"
-    ]
-  ]
+  "links": []
 }

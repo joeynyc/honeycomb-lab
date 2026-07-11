@@ -1,6 +1,6 @@
 # Honeycomb Gateway
 
-Single OpenAI-compatible API on the Mac mini for the whole lab.
+Single OpenAI-compatible API on the hub for the whole lab.
 
 ```
 http://127.0.0.1:4000/v1
@@ -36,7 +36,7 @@ curl -s http://127.0.0.1:4000/health | jq
 curl -s http://127.0.0.1:4000/v1/models | jq
 ```
 
-## Chat (Cursor / Hermes / etc.)
+## Chat (any OpenAI-compatible client)
 
 Base URL: `http://127.0.0.1:4000/v1`  
 API key: any string (ignored)

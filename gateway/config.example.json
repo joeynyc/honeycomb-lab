@@ -1,0 +1,24 @@
+{
+  "listen_host": "0.0.0.0",
+  "listen_port": 4000,
+  "default_model": "spark-main",
+  "cheap_order": ["lms", "spark1"],
+  "control_token": "generate-with: openssl rand -hex 16",
+  "backends": {
+    "spark1": {
+      "name": "Spark One (vLLM)",
+      "base_url": "http://192.168.1.50:8000/v1",
+      "kind": "vllm"
+    },
+    "lms": {
+      "name": "LM Studio on the hub",
+      "base_url": "http://127.0.0.1:1234/v1",
+      "kind": "lmstudio"
+    }
+  },
+  "aliases": {
+    "spark-main": { "backend": "spark1", "upstream_model": null },
+    "local-lms": { "backend": "lms", "upstream_model": null },
+    "default": { "backend": "spark1", "upstream_model": null }
+  }
+}

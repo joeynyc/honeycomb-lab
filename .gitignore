@@ -4,3 +4,4 @@ gateway/stats.json
 .DS_Store
 *.log
 __pycache__/
+gateway/config.json
