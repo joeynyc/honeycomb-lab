@@ -39,7 +39,8 @@
         1,
         0
       ],
-      "notes": "Peer Spark. Models = only the active vLLM serve."
+      "notes": "Peer Spark. Models = only the active vLLM serve.",
+      "doctorCommand": "cd ~/projects/spark-doctor && PYTHONPATH=src python3 -c \"from spark_doctor.cli import app; app()\" scan --sample-seconds 2 --no-logs --anonymize --json /tmp/.honeycomb-doctor.json >/dev/null 2>&1; cat /tmp/.honeycomb-doctor.json"
     },
     {
       "id": "mini",
