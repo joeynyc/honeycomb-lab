@@ -28,6 +28,10 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = Path(os.environ.get("HONEYCOMB_GATEWAY_CONFIG", ROOT / "config.json"))
+DASHBOARD_PATH = ROOT / "dashboard.html"
+
+sys.path.insert(0, str(ROOT))
+import nodes as fleet_nodes  # noqa: E402
 
 
 def load_config() -> dict[str, Any]:
@@ -509,6 +513,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path.rstrip("/") or "/"
 
+        # Browsers get the dashboard at /; API clients keep getting JSON.
+        wants_html = "text/html" in (self.headers.get("Accept") or "")
+        if (path == "/" and wants_html) or path == "/dashboard":
+            try:
+                body = DASHBOARD_PATH.read_bytes()
+                self._send(200, body, content_type="text/html; charset=utf-8")
+            except OSError:
+                self._send(404, json.dumps({"error": {"message": "dashboard.html missing"}}).encode())
+            return
+
+        if path == "/nodes":
+            payload = fleet_nodes.snapshot(activity_snapshot())
+            self._send(200, json.dumps(payload).encode())
+            return
+
         if path in ("/", "/health"):
             backends = {}
             act = activity_snapshot()
@@ -738,6 +757,7 @@ def main() -> None:
     host = CFG.get("listen_host", "0.0.0.0")
     port = int(CFG.get("listen_port", 4000))
     _load_stats()
+    fleet_nodes.start_prober()
     log(f"Honeycomb gateway → http://{host}:{port}")
     log(f"config: {CONFIG_PATH}")
     for bid, be in BACKENDS.items():

@@ -132,3 +132,12 @@ Node definitions live in `~/Library/Application Support/Honeycomb/fleet.json` (c
 **Fields:** `gatewayBackend` / `pingAlias` map nodes to backends in `gateway/config.json` so hexes light on traffic; `container` enables SERVE/STOP over SSH (docker start/stop); `hub: true` marks the center node; axial `[q,r]` optionally pins map position; `links` adds extra edges. The gateway's backends/aliases are configured separately in `gateway/config.json`.
 
 Set `HONEYCOMB_FLEET` env var to override the fleet file path.
+
+## Web dashboard (iPad / any browser)
+
+The gateway serves a live honeycomb dashboard at `http://<hub-ip>:4000/`
+(browsers get HTML; API clients still get JSON at `/health`). Same map,
+LIT pulses, node inspector with metrics, and traffic feed — no Mac app
+needed. On iPad/iPhone: open it in Safari → Share → **Add to Home
+Screen** for a full-screen app. Node data comes from `GET /nodes`
+(the gateway probes the fleet itself, reading the same fleet.json).

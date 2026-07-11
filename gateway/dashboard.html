@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0A0E0A">
+<title>Honeycomb</title>
+<!-- Inline SVG favicon: phosphor-green hexagon on near-black -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230A0E0A'/%3E%3Cpolygon points='32,6 54,19 54,45 32,58 10,45 10,19' fill='none' stroke='%237DFF3B' stroke-width='4'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230A0E0A'/%3E%3Cpolygon points='32,6 54,19 54,45 32,58 10,45 10,19' fill='none' stroke='%237DFF3B' stroke-width='4'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0A0E0A;
+    --green: #7DFF3B;
+    --green-dim: #4A8C2E;
+    --amber: #C4A359;
+    --red: #FF4566;
+    --text: #B8EB9E;
+    --muted: #597A59;
+    --panel: #0B110B;
+    --stroke: #334D33;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    overflow-x: hidden;
+    overscroll-behavior: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* Scanlines + vignette overlay */
+  #fx {
+    position: fixed; inset: 0; pointer-events: none; z-index: 999;
+    background:
+      repeating-linear-gradient(0deg, rgba(0,0,0,.12) 0px, rgba(0,0,0,.12) 1px, transparent 1px, transparent 3px),
+      radial-gradient(ellipse at center, rgba(0,0,0,0) 40%, rgba(0,0,0,.55) 100%);
+  }
+
+  /* ---------- Header ---------- */
+  header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px 10px;
+    border-bottom: 1px solid var(--stroke);
+    flex-wrap: wrap;
+  }
+  .title-block { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  #title {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--green);
+    text-shadow: 0 0 6px rgba(125,255,59,.65), 0 0 14px rgba(125,255,59,.3);
+  }
+  #title.down { color: var(--red); text-shadow: 0 0 6px rgba(255,69,102,.6); }
+  #subtitle {
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  #gwStatus.up { color: var(--green); }
+  #gwStatus.down { color: var(--red); }
+  #clock { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ---------- Main layout ---------- */
+  #main {
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+    position: relative;
+  }
+  #mapWrap {
+    flex: 1 1 auto;
+    min-width: 0;
+    position: relative;
+    transition: filter .3s ease;
+  }
+  #mapWrap.down { filter: grayscale(1) brightness(.55); }
+  #map { width: 100%; height: 100%; display: block; }
+
+  /* ---------- Inspector ---------- */
+  #inspector {
+    display: none;
+    flex-direction: column;
+    background: var(--panel);
+    border-left: 1px solid var(--stroke);
+    overflow-y: auto;
+  }
+  #inspector.open { display: flex; }
+  /* desktop/wide: side panel */
+  @media (min-width: 900px) {
+    #inspector { width: 320px; flex: 0 0 320px; }
+  }
+  /* narrow/iPad-portrait: bottom sheet */
+  @media (max-width: 899.98px) {
+    #inspector {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      max-height: 62vh;
+      border-left: none;
+      border-top: 1px solid var(--stroke);
+      border-radius: 12px 12px 0 0;
+      z-index: 50;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
+  #inspHead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--stroke);
+  }
+  #inspName { font-size: 15px; font-weight: 700; color: var(--green); letter-spacing: 1px; }
+  #inspClose {
+    background: none; border: 1px solid var(--stroke); color: var(--text);
+    width: 30px; height: 30px; min-width: 44px; min-height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; font-size: 16px; cursor: pointer; font-family: inherit;
+  }
+  #inspBody { padding: 8px 16px 18px; }
+  .row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 0; border-bottom: 1px solid rgba(51,77,51,.5);
+    font-size: 12px; gap: 10px;
+  }
+  .row .k { color: var(--muted); letter-spacing: 1px; text-transform: uppercase; font-size: 10px; white-space: nowrap; }
+  .row .v { color: var(--text); text-align: right; overflow-wrap: anywhere; }
+  .row .v.online { color: var(--green); }
+  .row .v.degraded { color: var(--amber); }
+  .row .v.offline, .row .v.unknown { color: var(--red); }
+  .metric-block { margin-top: 8px; }
+  .metric-row { margin: 8px 0; }
+  .metric-label {
+    display: flex; justify-content: space-between; font-size: 10px;
+    color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px;
+  }
+  .metric-label .val { color: var(--text); }
+  .bar-track { height: 5px; background: rgba(51,77,51,.4); border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; background: var(--green-dim); transition: width .4s ease; }
+  .bar-fill.warn { background: var(--amber); }
+  #inspModels { margin-top: 10px; }
+  #inspModels .k { display: block; margin-bottom: 4px; }
+  .model-tag {
+    display: inline-block; font-size: 10px; color: var(--text);
+    background: rgba(125,255,59,.08); border: 1px solid var(--stroke);
+    padding: 3px 7px; border-radius: 3px; margin: 2px 3px 2px 0;
+  }
+
+  /* ---------- Traffic feed ---------- */
+  #traffic {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--stroke);
+    background: var(--panel);
+    max-height: 220px;
+    display: flex;
+    flex-direction: column;
+  }
+  #trafficHead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 9px 16px;
+    font-size: 11px; letter-spacing: 2px; color: var(--muted);
+    cursor: pointer; user-select: none;
+    min-height: 44px;
+  }
+  #trafficHead .caret { color: var(--green-dim); transition: transform .2s ease; }
+  #traffic.collapsed #trafficHead .caret { transform: rotate(-90deg); }
+  #trafficList {
+    overflow-y: auto;
+    border-top: 1px solid rgba(51,77,51,.4);
+    max-height: 175px;
+  }
+  #traffic.collapsed #trafficList { display: none; }
+  #traffic.collapsed #trafficHead { border-bottom: none; }
+  .trow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 16px; font-size: 11px;
+    border-bottom: 1px solid rgba(51,77,51,.25);
+  }
+  .trow .t-time { color: var(--muted); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .trow .t-alias { color: var(--green-dim); flex: 0 0 auto; }
+  .trow .t-model { color: var(--text); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trow .t-right { flex: 0 0 auto; display: flex; gap: 10px; color: var(--muted); }
+  .trow .t-status.err { color: var(--red); }
+  #trafficEmpty { padding: 14px 16px; color: var(--muted); font-size: 11px; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--stroke); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div id="fx"></div>
+
+<header>
+  <div class="title-block">
+    <span id="title">HONEYCOMB</span>
+    <span id="subtitle">—</span>
+  </div>
+  <div class="header-right">
+    <span id="nodeCount">0/0 NODES</span>
+    <span id="gwStatus" class="up">GW &#9679; :4000</span>
+    <span id="clock">--:--:--</span>
+  </div>
+</header>
+
+<div id="main">
+  <div id="mapWrap">
+    <svg id="map" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="4" result="blur"/>
+          <feMerge>
+            <feMergeNode in="blur"/>
+            <feMergeNode in="SourceGraphic"/>
+          </feMerge>
+        </filter>
+      </defs>
+      <g id="latticeLayer"></g>
+      <g id="edgeLayer"></g>
+      <g id="dotLayer"></g>
+      <g id="nodeLayer"></g>
+    </svg>
+  </div>
+
+  <div id="inspector">
+    <div id="inspHead">
+      <span id="inspName">—</span>
+      <button id="inspClose" aria-label="Close">&times;</button>
+    </div>
+    <div id="inspBody"></div>
+  </div>
+</div>
+
+<div id="traffic">
+  <div id="trafficHead">
+    <span>TRAFFIC <span class="caret">&#9660;</span></span>
+    <span id="trafficCount"></span>
+  </div>
+  <div id="trafficList"><div id="trafficEmpty">No gateway traffic yet.</div></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- Constants ----------
+  var HEALTH_COLOR = {
+    online: "#7DFF3B",
+    degraded: "#C4A359",
+    offline: "#FF4566",
+    unknown: "#597A59"
+  };
+  var HEALTH_FILL_OPACITY = {
+    online: 0.22,
+    degraded: 0.12,
+    offline: 0.04,
+    unknown: 0.04
+  };
+  var HEX_S = 70; // desktop hex size (radius)
+  var POLL_MS = 4000;
+
+  // ---------- State ----------
+  var state = {
+    nodesData: null,
+    requestsData: [],
+    gatewayUp: true,
+    selectedId: null,
+    inspectorOpen: false
+  };
+
+  var svg = document.getElementById("map");
+  var latticeLayer = document.getElementById("latticeLayer");
+  var edgeLayer = document.getElementById("edgeLayer");
+  var dotLayer = document.getElementById("dotLayer");
+  var nodeLayer = document.getElementById("nodeLayer");
+  var mapWrap = document.getElementById("mapWrap");
+
+  var titleEl = document.getElementById("title");
+  var subtitleEl = document.getElementById("subtitle");
+  var nodeCountEl = document.getElementById("nodeCount");
+  var gwStatusEl = document.getElementById("gwStatus");
+  var clockEl = document.getElementById("clock");
+
+  var inspector = document.getElementById("inspector");
+  var inspName = document.getElementById("inspName");
+  var inspBody = document.getElementById("inspBody");
+  var inspClose = document.getElementById("inspClose");
+
+  var trafficEl = document.getElementById("traffic");
+  var trafficHead = document.getElementById("trafficHead");
+  var trafficList = document.getElementById("trafficList");
+  var trafficCount = document.getElementById("trafficCount");
+
+  // ---------- Hex geometry helpers ----------
+  function axialToPixel(q, r, s) {
+    var x = s * (Math.sqrt(3) * q + Math.sqrt(3) / 2 * r);
+    var y = s * 1.5 * r;
+    return { x: x, y: y };
+  }
+
+  function hexPoints(cx, cy, s) {
+    // pointy-top hex: vertices at angles offset by 30deg
+    var pts = [];
+    for (var i = 0; i < 6; i++) {
+      var angle = Math.PI / 180 * (60 * i - 30);
+      pts.push([cx + s * Math.cos(angle), cy + s * Math.sin(angle)]);
+    }
+    return pts.map(function (p) { return p[0].toFixed(2) + "," + p[1].toFixed(2); }).join(" ");
+  }
+
+  function svgEl(tag, attrs) {
+    var el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, k)) el.setAttribute(k, attrs[k]);
+      }
+    }
+    return el;
+  }
+
+  // axial ring of radius `radius` around origin, including origin cells within radius
+  function hexDisk(radius) {
+    var cells = [];
+    for (var q = -radius; q <= radius; q++) {
+      var r1 = Math.max(-radius, -q - radius);
+      var r2 = Math.min(radius, -q + radius);
+      for (var r = r1; r <= r2; r++) {
+        cells.push([q, r]);
+      }
+    }
+    return cells;
+  }
+
+  function truncMiddle(str, max) {
+    if (!str) return "";
+    if (str.length <= max) return str;
+    var half = Math.floor((max - 1) / 2);
+    return str.slice(0, half) + "…" + str.slice(str.length - (max - 1 - half));
+  }
+
+  function truncEnd(str, max) {
+    if (!str) return "";
+    if (str.length <= max) return str;
+    return str.slice(0, max - 1) + "…";
+  }
+
+  function fmtDuration(ms) {
+    if (ms == null) return "";
+    if (ms < 1000) return Math.round(ms) + "ms";
+    return (ms / 1000).toFixed(1) + "s";
+  }
+
+  function fmtTime(ts) {
+    var d = new Date(ts * 1000);
+    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  // ---------- Rendering: map ----------
+  var nodePositions = {}; // id -> {x,y,q,r}
+  var hubId = null;
+
+  function findHub(nodes) {
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].hub) return nodes[i].id;
+    }
+    // no node marked hub:true — fall back to the first node so hub-edges still render
+    return nodes.length ? nodes[0].id : null;
+  }
+
+  function computeViewBox(nodes) {
+    if (!nodes.length) return { minX: -300, minY: -300, w: 600, h: 600 };
+    var xs = [], ys = [];
+    nodes.forEach(function (n) {
+      var p = axialToPixel(n.axial[0], n.axial[1], HEX_S);
+      xs.push(p.x); ys.push(p.y);
+    });
+    var minX = Math.min.apply(null, xs) - HEX_S * 2;
+    var maxX = Math.max.apply(null, xs) + HEX_S * 2;
+    var minY = Math.min.apply(null, ys) - HEX_S * 2;
+    var maxY = Math.max.apply(null, ys) + HEX_S * 2;
+    var w = maxX - minX, h = maxY - minY;
+    // enforce a reasonable minimum canvas
+    if (w < 500) { var dx = (500 - w) / 2; minX -= dx; w = 500; }
+    if (h < 400) { var dy = (400 - h) / 2; minY -= dy; h = 400; }
+    return { minX: minX, minY: minY, w: w, h: h };
+  }
+
+  function renderLattice(nodes, vb) {
+    latticeLayer.innerHTML = "";
+    var occupied = {};
+    nodes.forEach(function (n) { occupied[n.axial[0] + "," + n.axial[1]] = true; });
+    var cells = hexDisk(3);
+    cells.forEach(function (c) {
+      var key = c[0] + "," + c[1];
+      if (occupied[key]) return;
+      var p = axialToPixel(c[0], c[1], HEX_S);
+      // only draw if within/near viewbox bounds (a bit of margin)
+      if (p.x < vb.minX - HEX_S || p.x > vb.minX + vb.w + HEX_S) return;
+      if (p.y < vb.minY - HEX_S || p.y > vb.minY + vb.h + HEX_S) return;
+      var poly = svgEl("polygon", {
+        points: hexPoints(p.x, p.y, HEX_S * 0.94),
+        fill: "none",
+        stroke: "#334D33",
+        "stroke-opacity": "0.5",
+        "stroke-width": "1"
+      });
+      latticeLayer.appendChild(poly);
+    });
+  }
+
+  function healthAlive(h) {
+    return h === "online" || h === "degraded";
+  }
+
+  function renderEdges(nodes, links) {
+    edgeLayer.innerHTML = "";
+    dotLayer.innerHTML = "";
+    var byId = {};
+    nodes.forEach(function (n) { byId[n.id] = n; });
+
+    var edgeSet = {};
+    var edgeList = [];
+
+    function addEdge(a, b, thick) {
+      if (!byId[a] || !byId[b]) return;
+      var key = [a, b].sort().join("|");
+      if (edgeSet[key]) {
+        // upgrade to thick if needed
+        if (thick) edgeSet[key].thick = true;
+        return;
+      }
+      var rec = { a: a, b: b, thick: thick };
+      edgeSet[key] = rec;
+      edgeList.push(rec);
+    }
+
+    if (hubId) {
+      nodes.forEach(function (n) {
+        if (n.id !== hubId) addEdge(hubId, n.id, false);
+      });
+    }
+    (links || []).forEach(function (pair) {
+      addEdge(pair[0], pair[1], true);
+    });
+
+    edgeList.forEach(function (e) {
+      var pa = nodePositions[e.a], pb = nodePositions[e.b];
+      if (!pa || !pb) return;
+      var na = byId[e.a], nb = byId[e.b];
+      var alive = healthAlive(na.health) && healthAlive(nb.health);
+      var line = svgEl("line", {
+        x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y,
+        stroke: "#7DFF3B",
+        "stroke-opacity": alive ? "0.35" : "0.12",
+        "stroke-width": e.thick ? "2.5" : "1"
+      });
+      if (!alive) line.setAttribute("stroke", "#334D33");
+      edgeLayer.appendChild(line);
+
+      // animated dots for lit edges (hub -> lit node)
+      var litNode = null;
+      if (nb.lit && e.a === hubId) litNode = nb;
+      if (na.lit && e.b === hubId) litNode = na;
+      if (litNode) {
+        addTravelingDots(pa, pb, litNode === na);
+      }
+    });
+  }
+
+  var animDots = [];
+  function addTravelingDots(pa, pb, reverse) {
+    // two dots animating along hub->node edge using SMIL animateMotion
+    var from = reverse ? pb : pa;
+    var to = reverse ? pa : pb;
+    [0, 0.5].forEach(function (offset) {
+      var dot = svgEl("circle", { r: "3", fill: "#7DFF3B", opacity: "0.9" });
+      dot.setAttribute("filter", "url(#glow)");
+      var path = "M " + from.x + "," + from.y + " L " + to.x + "," + to.y;
+      var anim = svgEl("animateMotion", {
+        dur: "1.6s",
+        repeatCount: "indefinite",
+        path: path,
+        begin: (offset * 1.6) + "s"
+      });
+      dot.appendChild(anim);
+      dotLayer.appendChild(dot);
+    });
+  }
+
+  function shortModelLabel(models) {
+    if (!models || !models.length) return null;
+    return truncEnd(models[0], 14);
+  }
+
+  function renderNodes(nodes) {
+    nodeLayer.innerHTML = "";
+    nodes.forEach(function (n) {
+      var p = nodePositions[n.id];
+      if (!p) return;
+      var color = HEALTH_COLOR[n.health] || HEALTH_COLOR.unknown;
+      var fillOpacity = HEALTH_FILL_OPACITY[n.health] != null ? HEALTH_FILL_OPACITY[n.health] : 0.04;
+
+      var g = svgEl("g", {
+        class: "node-hex",
+        "data-id": n.id,
+        style: "cursor:pointer;"
+      });
+
+      var poly = svgEl("polygon", {
+        points: hexPoints(p.x, p.y, HEX_S * 0.94),
+        fill: color,
+        "fill-opacity": String(fillOpacity),
+        stroke: color,
+        "stroke-width": n.lit ? "2.5" : "1.5",
+        "stroke-opacity": n.lit ? "1" : "0.85"
+      });
+      if (n.lit) {
+        poly.setAttribute("filter", "url(#glow)");
+        var pulse = svgEl("animate", {
+          attributeName: "stroke-opacity",
+          values: "1;0.5;1",
+          dur: "1.8s",
+          repeatCount: "indefinite"
+        });
+        poly.appendChild(pulse);
+      }
+      g.appendChild(poly);
+
+      var name = svgEl("text", {
+        x: p.x, y: p.y - 4,
+        "text-anchor": "middle",
+        "font-size": "13",
+        "font-weight": "700",
+        fill: "#B8EB9E",
+        "font-family": "inherit"
+      });
+      name.textContent = n.name || n.id;
+      g.appendChild(name);
+
+      var subLabel, subColor;
+      if (n.lit) {
+        subLabel = "LIT"; subColor = "#7DFF3B";
+      } else if (n.health === "offline") {
+        subLabel = "OFFLINE"; subColor = HEALTH_COLOR.offline;
+      } else if (n.health === "degraded") {
+        subLabel = "DEGRADED"; subColor = HEALTH_COLOR.degraded;
+      } else {
+        subLabel = shortModelLabel(n.models) || n.shortLabel || "";
+        subColor = "#597A59";
+      }
+      var sub = svgEl("text", {
+        x: p.x, y: p.y + 12,
+        "text-anchor": "middle",
+        "font-size": "10",
+        fill: subColor,
+        "font-family": "inherit"
+      });
+      sub.textContent = subLabel;
+      g.appendChild(sub);
+
+      g.addEventListener("click", function () { selectNode(n.id); });
+      nodeLayer.appendChild(g);
+    });
+  }
+
+  function renderMap(data) {
+    var nodes = data.nodes || [];
+    hubId = findHub(nodes);
+    var vb = computeViewBox(nodes);
+    svg.setAttribute("viewBox", vb.minX + " " + vb.minY + " " + vb.w + " " + vb.h);
+
+    nodePositions = {};
+    nodes.forEach(function (n) {
+      var p = axialToPixel(n.axial[0], n.axial[1], HEX_S);
+      nodePositions[n.id] = { x: p.x, y: p.y, q: n.axial[0], r: n.axial[1] };
+    });
+
+    renderLattice(nodes, vb);
+    renderEdges(nodes, data.links || []);
+    renderNodes(nodes);
+  }
+
+  // ---------- Header ----------
+  function renderHeader(data, gatewayUp) {
+    var nodes = (data && data.nodes) || [];
+    titleEl.textContent = (data && data.title) || "HONEYCOMB";
+    titleEl.classList.toggle("down", !gatewayUp);
+    subtitleEl.textContent = nodes.length ? nodes.map(function (n) { return n.name || n.id; }).join(" · ") : "—";
+
+    var onlineCount = nodes.filter(function (n) { return healthAlive(n.health); }).length;
+    nodeCountEl.textContent = onlineCount + "/" + nodes.length + " NODES";
+
+    gwStatusEl.classList.toggle("up", gatewayUp);
+    gwStatusEl.classList.toggle("down", !gatewayUp);
+    gwStatusEl.innerHTML = gatewayUp
+      ? "GW &#9679; :4000"
+      : "GATEWAY &#9675; DOWN";
+
+    var now = new Date();
+    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+    clockEl.textContent = pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+  }
+
+  // ---------- Inspector ----------
+  function healthGlyph(h) {
+    if (h === "online") return "●";
+    if (h === "degraded") return "◐";
+    return "○"; // offline / unknown
+  }
+
+  function buildBar(label, pct, extra) {
+    var warn = pct != null && pct > 85;
+    var pctText = pct != null ? Math.round(pct) + "%" : "—";
+    var wrap = document.createElement("div");
+    wrap.className = "metric-row";
+    var labelRow = document.createElement("div");
+    labelRow.className = "metric-label";
+    var lspan = document.createElement("span");
+    lspan.textContent = label;
+    var vspan = document.createElement("span");
+    vspan.className = "val";
+    vspan.textContent = extra != null ? extra : pctText;
+    labelRow.appendChild(lspan);
+    labelRow.appendChild(vspan);
+    var track = document.createElement("div");
+    track.className = "bar-track";
+    var fill = document.createElement("div");
+    fill.className = "bar-fill" + (warn ? " warn" : "");
+    fill.style.width = (pct != null ? Math.min(100, Math.max(0, pct)) : 0) + "%";
+    track.appendChild(fill);
+    wrap.appendChild(labelRow);
+    wrap.appendChild(track);
+    return wrap;
+  }
+
+  function renderInspector(node) {
+    if (!node) return;
+    inspName.textContent = node.name || node.id;
+    inspBody.innerHTML = "";
+
+    function addRow(k, vText, vClass) {
+      var row = document.createElement("div");
+      row.className = "row";
+      var kEl = document.createElement("span");
+      kEl.className = "k";
+      kEl.textContent = k;
+      var vEl = document.createElement("span");
+      vEl.className = "v" + (vClass ? " " + vClass : "");
+      vEl.textContent = vText;
+      row.appendChild(kEl);
+      row.appendChild(vEl);
+      inspBody.appendChild(row);
+    }
+
+    addRow("HOST/ROLE", node.role || "—");
+    addRow("HEALTH", healthGlyph(node.health) + " " + (node.health || "unknown").toUpperCase(), node.health || "unknown");
+    addRow("PATH", node.pathBadge || "—");
+    addRow("DETAIL", node.detail || "—");
+    addRow("LATENCY", node.latencyMs != null ? Math.round(node.latencyMs) + " ms" : "—");
+
+    var m = node.metrics;
+    if (m) {
+      var mb = document.createElement("div");
+      mb.className = "metric-block";
+      if (m.gpuUtilPct != null) mb.appendChild(buildBar("GPU", m.gpuUtilPct));
+      if (m.memUsedMB != null && m.memTotalMB != null) {
+        var usedGB = (m.memUsedMB / 1024).toFixed(1);
+        var totGB = (m.memTotalMB / 1024).toFixed(1);
+        var pct = m.memTotalMB > 0 ? (m.memUsedMB / m.memTotalMB) * 100 : null;
+        mb.appendChild(buildBar("MEM", pct, usedGB + " / " + totGB + " GB"));
+      }
+      if (m.kvCachePct != null) mb.appendChild(buildBar("KV CACHE", m.kvCachePct));
+      if (m.genTokPerSec != null && m.genTokPerSec > 0.05) {
+        var tokRow = document.createElement("div");
+        tokRow.className = "row";
+        tokRow.innerHTML = '<span class="k">TOK/S</span><span class="v online">' + m.genTokPerSec.toFixed(1) + "</span>";
+        mb.appendChild(tokRow);
+      }
+      inspBody.appendChild(mb);
+    }
+
+    if (node.models && node.models.length) {
+      var mWrap = document.createElement("div");
+      mWrap.id = "inspModels";
+      var kEl = document.createElement("span");
+      kEl.className = "k";
+      kEl.textContent = "MODELS";
+      mWrap.appendChild(kEl);
+      var listWrap = document.createElement("div");
+      node.models.slice(0, 6).forEach(function (m2) {
+        var tag = document.createElement("span");
+        tag.className = "model-tag";
+        tag.textContent = truncMiddle(m2, 24);
+        listWrap.appendChild(tag);
+      });
+      mWrap.appendChild(listWrap);
+      inspBody.appendChild(mWrap);
+    }
+  }
+
+  function findNodeById(id) {
+    if (!state.nodesData || !state.nodesData.nodes) return null;
+    for (var i = 0; i < state.nodesData.nodes.length; i++) {
+      if (state.nodesData.nodes[i].id === id) return state.nodesData.nodes[i];
+    }
+    return null;
+  }
+
+  function selectNode(id) {
+    state.selectedId = id;
+    state.inspectorOpen = true;
+    inspector.classList.add("open");
+    var node = findNodeById(id);
+    renderInspector(node);
+  }
+
+  function closeInspector() {
+    state.inspectorOpen = false;
+    state.selectedId = null;
+    inspector.classList.remove("open");
+  }
+
+  inspClose.addEventListener("click", closeInspector);
+
+  // ---------- Traffic feed ----------
+  function renderTraffic(requests) {
+    trafficList.innerHTML = "";
+    if (!requests || !requests.length) {
+      var empty = document.createElement("div");
+      empty.id = "trafficEmpty";
+      empty.textContent = "No gateway traffic yet.";
+      trafficList.appendChild(empty);
+      trafficCount.textContent = "";
+      return;
+    }
+    trafficCount.textContent = requests.length + " REQ";
+    var visible = requests.slice(0, 30); // keep some buffer for scroll, ~8 visible via max-height
+    visible.forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "trow";
+
+      var t = document.createElement("span");
+      t.className = "t-time";
+      t.textContent = fmtTime(r.ts);
+
+      var alias = document.createElement("span");
+      alias.className = "t-alias";
+      alias.textContent = r.alias || "—";
+
+      var model = document.createElement("span");
+      model.className = "t-model";
+      model.textContent = "← " + (r.model || "—");
+
+      var right = document.createElement("span");
+      right.className = "t-right";
+
+      if (r.completion_tokens) {
+        var tok = document.createElement("span");
+        tok.textContent = r.completion_tokens + " tok";
+        right.appendChild(tok);
+      }
+      var dur = document.createElement("span");
+      dur.textContent = fmtDuration(r.duration_ms);
+      right.appendChild(dur);
+
+      var status = document.createElement("span");
+      status.className = "t-status" + (r.status && (r.status < 200 || r.status >= 300) ? " err" : "");
+      status.textContent = String(r.status != null ? r.status : "—");
+      right.appendChild(status);
+
+      row.appendChild(t);
+      row.appendChild(alias);
+      row.appendChild(model);
+      row.appendChild(right);
+      trafficList.appendChild(row);
+    });
+  }
+
+  trafficHead.addEventListener("click", function () {
+    trafficEl.classList.toggle("collapsed");
+  });
+
+  // ---------- Polling ----------
+  function poll() {
+    Promise.all([
+      fetch("/nodes", { cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error("nodes " + r.status);
+        return r.json();
+      }),
+      fetch("/requests", { cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error("requests " + r.status);
+        return r.json();
+      })
+    ]).then(function (results) {
+      state.gatewayUp = true;
+      state.nodesData = results[0];
+      state.requestsData = (results[1] && results[1].requests) || [];
+
+      renderHeader(state.nodesData, true);
+      mapWrap.classList.remove("down");
+      renderMap(state.nodesData);
+      renderTraffic(state.requestsData);
+
+      if (state.inspectorOpen && state.selectedId) {
+        var node = findNodeById(state.selectedId);
+        if (node) {
+          renderInspector(node);
+        } else {
+          closeInspector();
+        }
+      }
+    }).catch(function () {
+      state.gatewayUp = false;
+      renderHeader(state.nodesData, false);
+      mapWrap.classList.add("down");
+      // keep last-known clock ticking even when down
+    });
+  }
+
+  // Live clock ticks every second regardless of poll cadence
+  setInterval(function () {
+    var now = new Date();
+    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+    // only update the time portion; header text already reflects gw state on poll
+  }, 1000);
+
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+</body>
+</html>
