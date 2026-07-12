@@ -1,33 +1,71 @@
-# Honeycomb Lab
+<div align="center">
 
-A control plane for your home AI fleet: a phosphor-green hex map of every
-GPU box you own, plus an OpenAI-compatible gateway that routes to all of
-them through one URL — with cost-aware routing, failover, live metrics,
-and one-tap node control. macOS app + web dashboard for iPad/iPhone/any
-browser.
+<img src="docs/logo.png" width="120" alt="Honeycomb"/>
 
-![Honeycomb Lab](docs/minilab.png)
+# Honeycomb
+
+**Every GPU you own — one living map.**
+
+A control plane and OpenAI-compatible gateway for your home AI fleet:
+route every model through one endpoint, watch traffic light up the map,
+and drive it all from your Mac, iPad, or phone.
+
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-1d1d1f?logo=apple&logoColor=white)
+![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)
+![gateway: Python stdlib · zero deps](https://img.shields.io/badge/gateway-Python%20stdlib%20%C2%B7%20zero%20deps-3776AB?logo=python&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-3fb950)
+
+<img src="docs/honeycomb-demo.gif" width="760" alt="Honeycomb — the map goes LIT as traffic flows, with live GPU and tok/s"/>
+
+[**Install**](#install) · [**Quickstart**](#install) · [**How it works**](#the-gateway) · [**Web dashboard**](#web-dashboard)
+
+</div>
 
 ## What it does
 
-- **One API for the whole fleet** — point any OpenAI-compatible client at
-  `http://<hub>:4000/v1` and route by alias to vLLM boxes, LM Studio, or
-  any OpenAI-compatible endpoint. `model: "cheap"` picks the least
-  expensive healthy backend; `model: "any"` adds automatic failover when
-  a backend dies mid-request.
-- **A map that tells the truth** — each node is a hex: outline color is
-  health, hexes go **LIT** with animated pulses when traffic flows through
-  the gateway, and the inspector shows GPU %, unified memory, KV-cache,
-  tok/s, latency trend, and what's actually loaded (never a catalog dump).
-- **Fleet control from the map** — PING (one-shot prompt through the real
-  wire), SERVE/STOP (docker start/stop of a node's inference container
-  over SSH, with confirmation), and DOCTOR
-  ([spark-doctor](https://github.com/joeynyc/spark-doctor) diagnostics,
-  auto-run when a node fails so the "why" is waiting for you).
-- **Works everywhere** — native macOS app (menu bar + notifications) and
-  a self-contained web dashboard served by the gateway itself: open it on
-  an iPad/iPhone, Add to Home Screen, and control the fleet from anywhere
-  (pairs perfectly with Tailscale).
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**🔌 One API for the whole fleet**
+
+Point any OpenAI-compatible client at `http://<hub>:4000/v1`. Route by
+alias to vLLM boxes, LM Studio, or any endpoint. `cheap` picks the least
+expensive healthy backend; `any` adds automatic failover mid-request.
+
+</td>
+<td width="50%" valign="top">
+
+**🗺️ A map that tells the truth**
+
+Each node is a hex — color is health, and it goes **LIT** with animated
+pulses when traffic flows. The inspector shows real GPU %, memory,
+KV-cache, tok/s, and latency trend. Never a catalog dump.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**🛠️ Fleet control from the map**
+
+**PING** a node through the real wire, **SERVE / STOP** its inference
+container over SSH, and **DOCTOR** it with
+[spark-doctor](https://github.com/joeynyc/spark-doctor) — auto-run when a
+node fails, so the "why" is already waiting.
+
+</td>
+<td width="50%" valign="top">
+
+**📱 Works everywhere**
+
+A native macOS app (menu bar + notifications) **and** a self-contained
+web dashboard the gateway serves itself. Open it on an iPad or phone, Add
+to Home Screen, and run the fleet from anywhere over Tailscale.
+
+</td>
+</tr>
+</table>
 
 ## Architecture
 
