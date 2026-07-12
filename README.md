@@ -69,17 +69,9 @@ to Home Screen, and run the fleet from anywhere over Tailscale.
 
 ## Architecture
 
-```
- any OpenAI-compatible client
-            │
-            ▼
-      hub :4000  ← gateway (Python, stdlib only)
-            │
-   ┌────────┼──────────────┐
-   ▼        ▼              ▼
- vLLM     vLLM        LM Studio (+ LM Link peers)
- box A    box B       on the hub
-```
+<div align="center">
+<img src="docs/architecture.svg" width="720" alt="Client → gateway → your GPU fleet"/>
+</div>
 
 The hub is the Mac that runs the gateway and the app. Everything the
 system believes about your fleet lives in one file: `fleet.json`.
@@ -140,6 +132,10 @@ To run the gateway as a service (start at login, restart on crash), see [docs/la
 Any alias can opt into failover per-request with `"failover": true`.
 Aliases with no pinned model auto-pick the backend's first chat-capable
 model (embedding models are skipped).
+
+<div align="center">
+<img src="docs/routing.svg" width="760" alt="cheap/any routing picks the cheapest healthy backend, then fails over"/>
+</div>
 
 Endpoints: `/v1/chat/completions` · `/v1/completions` · `/v1/embeddings`
 (all proxied, stream + non-stream) · `/health` (backends, activity,
