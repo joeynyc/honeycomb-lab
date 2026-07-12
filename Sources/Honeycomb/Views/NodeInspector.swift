@@ -65,6 +65,10 @@ struct NodeInspector: View {
             row("ROLE", node.roleLabel)
             row("HEALTH", "\(node.health.glyph) \(node.health.rawValue.uppercased())")
             row("PATH", node.pathBadge)
+
+            // Actions up top — always visible without scrolling past models
+            actionBar(node)
+
             if node.probe == .lmlinkPeer {
                 let peer = node.lmLinkPeer ?? node.hostname
                 row("LINK", node.dashboardOK ? "\(Privacy.host(peer)) · LM Link connected" : "LM Link peer not seen")
@@ -179,87 +183,6 @@ struct NodeInspector: View {
                 .foregroundStyle(LabTheme.textMuted)
                 .padding(.top, 6)
 
-            HStack(spacing: 10) {
-                if node.sshHost != nil {
-                    Button(action: onSSH) {
-                        labelChip("SSH")
-                    }
-                    .buttonStyle(.plain)
-                }
-                // Only show OPEN API when something is actually listening
-                if node.inferenceOK {
-                    Link(destination: node.baseURL) {
-                        labelChip("OPEN API")
-                    }
-                }
-                if node.pingAlias != nil {
-                    Button {
-                        Task { await ping.ping(node: node) }
-                    } label: {
-                        labelChip(ping.isPinging ? "PING…" : "PING")
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(ping.isPinging)
-                }
-                if let doctor, node.doctorCommand != nil, node.sshHost != nil {
-                    let busy = doctor.busyNodeID == node.id
-                    Button {
-                        Task {
-                            await doctor.scan(node)
-                        }
-                    } label: {
-                        labelChip(busy ? "SCAN…" : "DOCTOR")
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(busy)
-                }
-                if let control, let target = control.target(for: node) {
-                    let busy = control.busyNodeID == node.id
-                    if node.inferenceOK {
-                        Button {
-                            pendingAction = "stop"
-                        } label: {
-                            labelChip(busy ? "…" : "STOP", tint: LabTheme.alert)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(busy)
-                    } else {
-                        Button {
-                            pendingAction = "start"
-                        } label: {
-                            labelChip(busy ? "…" : "SERVE")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(busy)
-                    }
-                    Spacer()
-                        .frame(width: 0)
-                        .confirmationDialog(
-                            "\(pendingAction?.uppercased() ?? "") \(target.container) on \(node.name)?",
-                            isPresented: Binding(
-                                get: { pendingAction != nil },
-                                set: { if !$0 { pendingAction = nil } }
-                            ),
-                            titleVisibility: .visible
-                        ) {
-                            Button(pendingAction == "stop" ? "Stop container" : "Start container") {
-                                let action = pendingAction
-                                pendingAction = nil
-                                Task {
-                                    if action == "stop" {
-                                        await control.stop(node)
-                                    } else {
-                                        await control.start(node)
-                                    }
-                                    onRefresh()
-                                }
-                            }
-                            Button("Cancel", role: .cancel) { pendingAction = nil }
-                        }
-                }
-            }
-            .padding(.top, 8)
-
             if let r = ping.result, r.nodeID == node.id {
                 row("PING", r.summary)
                     .foregroundStyle(r.isError ? LabTheme.alert : LabTheme.text)
@@ -276,6 +199,87 @@ struct NodeInspector: View {
             ping.clear()
             pendingAction = nil
         }
+    }
+
+    /// SSH/TERM · OPEN API · PING · DOCTOR · SERVE/STOP — always near the top.
+    @ViewBuilder
+    private func actionBar(_ node: LabNode) -> some View {
+        HStack(spacing: 10) {
+            // Hub (Mac mini) or any node with sshHost → Ghostty
+            if node.sshHost != nil || node.isHub || node.probe == .lmstudioHub {
+                Button(action: onSSH) {
+                    // User looks for "SSH"; hub opens local Ghostty shell
+                    labelChip(node.sshHost == nil ? "SSH" : "SSH")
+                }
+                .buttonStyle(.plain)
+            }
+            if node.inferenceOK {
+                Link(destination: node.baseURL) {
+                    labelChip("OPEN API")
+                }
+            }
+            if node.pingAlias != nil {
+                Button {
+                    Task { await ping.ping(node: node) }
+                } label: {
+                    labelChip(ping.isPinging ? "PING…" : "PING")
+                }
+                .buttonStyle(.plain)
+                .disabled(ping.isPinging)
+            }
+            if let doctor, node.doctorCommand != nil, node.sshHost != nil {
+                let busy = doctor.busyNodeID == node.id
+                Button {
+                    Task { await doctor.scan(node) }
+                } label: {
+                    labelChip(busy ? "SCAN…" : "DOCTOR")
+                }
+                .buttonStyle(.plain)
+                .disabled(busy)
+            }
+            if let control, let target = control.target(for: node) {
+                let busy = control.busyNodeID == node.id
+                if node.inferenceOK {
+                    Button { pendingAction = "stop" } label: {
+                        labelChip(busy ? "…" : "STOP", tint: LabTheme.alert)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+                } else {
+                    Button { pendingAction = "start" } label: {
+                        labelChip(busy ? "…" : "SERVE")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+                }
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .confirmationDialog(
+                        "\(pendingAction?.uppercased() ?? "") \(target.container) on \(node.name)?",
+                        isPresented: Binding(
+                            get: { pendingAction != nil },
+                            set: { if !$0 { pendingAction = nil } }
+                        ),
+                        titleVisibility: .visible
+                    ) {
+                        Button(pendingAction == "stop" ? "Stop container" : "Start container") {
+                            let action = pendingAction
+                            pendingAction = nil
+                            Task {
+                                if action == "stop" {
+                                    await control.stop(node)
+                                } else {
+                                    await control.start(node)
+                                }
+                                onRefresh()
+                            }
+                        }
+                        Button("Cancel", role: .cancel) { pendingAction = nil }
+                    }
+            }
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 2)
     }
 
     /// spark-doctor findings: worst severity first, action hints inline.

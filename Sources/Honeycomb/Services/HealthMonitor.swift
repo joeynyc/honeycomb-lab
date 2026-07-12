@@ -271,18 +271,59 @@ final class HealthMonitor {
         }
     }
 
+    /// Open Ghostty: SSH to remote nodes, local shell on the hub (Mac mini).
     func openSSH(_ node: LabNode) {
-        guard let host = node.sshHost else { return }
-        let script = """
-        tell application "Terminal"
-          activate
-          do script "ssh \(host)"
-        end tell
-        """
+        if let host = node.sshHost, !host.isEmpty {
+            openGhostty(arguments: ["-e", "ssh", host])
+            return
+        }
+        if node.isHub {
+            // Local interactive shell on this Mac mini
+            openGhostty(arguments: ["-e", "/bin/zsh", "-i"])
+            return
+        }
+    }
+
+    /// Prefer Ghostty; fall back to Terminal.app if Ghostty is missing.
+    private func openGhostty(arguments: [String]) {
+        let ghosttyApp = "/Applications/Ghostty.app"
+        if FileManager.default.fileExists(atPath: ghosttyApp) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            // -n: new instance/window · -a: app · --args forwarded to Ghostty
+            process.arguments = ["-na", ghosttyApp, "--args"] + arguments
+            try? process.run()
+            return
+        }
+        // Fallback: Terminal.app
+        let cmd: String
+        if arguments.count >= 2, arguments[0] == "-e" {
+            cmd = arguments.dropFirst().map { shellEscape($0) }.joined(separator: " ")
+        } else {
+            cmd = ""
+        }
+        let script: String
+        if cmd.isEmpty {
+            script = "tell application \"Terminal\" to activate"
+        } else {
+            script = """
+            tell application "Terminal"
+              activate
+              do script "\(cmd)"
+            end tell
+            """
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", script]
         try? process.run()
+    }
+
+    private func shellEscape(_ s: String) -> String {
+        if s.rangeOfCharacter(from: CharacterSet.alphanumerics.inverted) == nil {
+            return s
+        }
+        return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     // MARK: - Probe
