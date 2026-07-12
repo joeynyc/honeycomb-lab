@@ -5,6 +5,7 @@ import SwiftUI
 struct HoneycombApp: App {
     @State private var monitor = HealthMonitor()
     @Environment(\.openWindow) private var openWindow
+    @AppStorage("privacyMode") private var privacyMode = false
 
     var body: some Scene {
         WindowGroup("Honeycomb Lab", id: "main") {
@@ -25,6 +26,11 @@ struct HoneycombApp: App {
                     Task { await monitor.refreshAll() }
                 }
                 .keyboardShortcut("r", modifiers: [.command])
+                Divider()
+                Button(privacyMode ? "Privacy Mode: On" : "Privacy Mode: Off") {
+                    privacyMode.toggle()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
             }
         }
 

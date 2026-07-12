@@ -3,6 +3,8 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var monitor: HealthMonitor
     @AppStorage("showFeed") private var showFeed = true
+    /// Redacts addresses/hostnames for screenshots, demos, and projectors.
+    @AppStorage("privacyMode") private var privacyMode = false
 
     var body: some View {
         ZStack {
@@ -99,6 +101,22 @@ struct ContentView: View {
                 .stroke(LabTheme.amberDim, lineWidth: 1)
         )
         .padding(10)
+    }
+
+    private func toggleChip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(LabTheme.monoTiny)
+                .tracking(1)
+                .foregroundStyle(on ? LabTheme.phosphor : LabTheme.textMuted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 2)
+                        .stroke(on ? LabTheme.phosphor.opacity(0.5) : LabTheme.stroke, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     /// The gateway is the engine — if it's down, nothing else is meaningful.
@@ -201,24 +219,10 @@ struct ContentView: View {
 
             Spacer()
 
-            Button {
-                showFeed.toggle()
-            } label: {
-                Text("FEED")
-                    .font(LabTheme.monoTiny)
-                    .tracking(1)
-                    .foregroundStyle(showFeed ? LabTheme.phosphor : LabTheme.textMuted)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 2)
-                            .stroke(
-                                showFeed ? LabTheme.phosphor.opacity(0.5) : LabTheme.stroke,
-                                lineWidth: 1
-                            )
-                    )
+            HStack(spacing: 8) {
+                toggleChip("FEED", on: showFeed) { showFeed.toggle() }
+                toggleChip("PRIVACY", on: privacyMode) { privacyMode.toggle() }
             }
-            .buttonStyle(.plain)
             .padding(.trailing, 14)
 
             VStack(alignment: .trailing, spacing: 4) {

@@ -61,19 +61,19 @@ struct NodeInspector: View {
                     .foregroundStyle(LabTheme.phosphorDim)
             }
 
-            row("HOST", "\(node.hostname) · \(node.hostAddress)")
+            row("HOST", Privacy.enabled ? "•••" : "\(node.hostname) · \(node.hostAddress)")
             row("ROLE", node.roleLabel)
             row("HEALTH", "\(node.health.glyph) \(node.health.rawValue.uppercased())")
             row("PATH", node.pathBadge)
             if node.probe == .lmlinkPeer {
                 let peer = node.lmLinkPeer ?? node.hostname
-                row("LINK", node.dashboardOK ? "\(peer) · LM Link connected" : "LM Link peer not seen")
+                row("LINK", node.dashboardOK ? "\(Privacy.host(peer)) · LM Link connected" : "LM Link peer not seen")
                 if let ssh = node.sshHost {
-                    row("SSH", ssh + (node.sshOK ? " · ok" : " · down"))
+                    row("SSH", Privacy.host(ssh) + (node.sshOK ? " · ok" : " · down"))
                 }
             } else {
                 if let ssh = node.sshHost {
-                    row("SSH", ssh + (node.sshOK ? " · ok" : " · down"))
+                    row("SSH", Privacy.host(ssh) + (node.sshOK ? " · ok" : " · down"))
                 }
                 if node.dashboardURL != nil {
                     row("SYNC", node.dashboardOK ? "dashboard tunnel ok" : "no dashboard tunnel")
@@ -82,23 +82,23 @@ struct NodeInspector: View {
             switch node.probe {
             case .lmstudioHub:
                 row("INFER", node.inferenceOK
-                    ? "LM Studio · \(node.baseURL.absoluteString)"
+                    ? "LM Studio · \(Privacy.scrub(node.baseURL.absoluteString))"
                     : "LM Studio server off (lms server start)")
             case .lmlinkPeer:
                 row("INFER", node.inferenceOK
-                    ? "API via hub LMS · \(node.baseURL.absoluteString)"
+                    ? "API via hub LMS · \(Privacy.scrub(node.baseURL.absoluteString))"
                     : "no chat API yet (load model on peer / start hub LMS)")
             case .vllmSSH:
                 row("INFER", node.inferenceOK
-                    ? "vLLM · \(node.baseURL.absoluteString)"
+                    ? "vLLM · \(Privacy.scrub(node.baseURL.absoluteString))"
                     : "idle (no vLLM serving)")
             case .httpOnly:
                 row("INFER", node.inferenceOK
-                    ? "API · \(node.baseURL.absoluteString)"
+                    ? "API · \(Privacy.scrub(node.baseURL.absoluteString))"
                     : "API not answering")
             }
             if !node.statusDetail.isEmpty {
-                row("LINKS", node.statusDetail)
+                row("LINKS", Privacy.scrub(node.statusDetail))
             }
             if let ms = node.latencyMs {
                 row("LATENCY", String(format: "%.0f ms", ms))
@@ -174,7 +174,7 @@ struct NodeInspector: View {
                 .frame(maxHeight: 120)
             }
 
-            Text(node.notes)
+            Text(Privacy.scrub(node.notes))
                 .font(LabTheme.monoTiny)
                 .foregroundStyle(LabTheme.textMuted)
                 .padding(.top, 6)
