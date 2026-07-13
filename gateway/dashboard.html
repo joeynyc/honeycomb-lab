@@ -1189,13 +1189,6 @@
     });
   }
 
-  // Live clock ticks every second regardless of poll cadence
-  setInterval(function () {
-    var now = new Date();
-    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
-    // only update the time portion; header text already reflects gw state on poll
-  }, 1000);
-
   poll();
   setInterval(poll, POLL_MS);
 })();

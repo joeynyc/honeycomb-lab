@@ -3,7 +3,6 @@ import SwiftUI
 enum LabTheme {
     /// Near-black CRT
     static let bg = Color(red: 0.04, green: 0.055, blue: 0.04)
-    static let bgElevated = Color(red: 0.06, green: 0.08, blue: 0.06)
     /// Solid panel — no desktop bleed-through
     static let panel = Color(red: 0.045, green: 0.065, blue: 0.045)
 
@@ -28,7 +27,6 @@ enum LabTheme {
     static let mono: Font = .system(.body, design: .monospaced)
     static let monoSmall: Font = .system(size: 11, weight: .regular, design: .monospaced)
     static let monoTiny: Font = .system(size: 9, weight: .medium, design: .monospaced)
-    static let titleBlock: Font = .system(size: 28, weight: .bold, design: .monospaced)
 }
 
 struct CRTBackground: View {

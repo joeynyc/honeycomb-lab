@@ -114,9 +114,6 @@ struct LabNode: Identifiable, Sendable, Equatable {
         return "\(head) + \(models.count - 1) more"
     }
 
-    /// Chat only when an OpenAI-compatible endpoint answers
-    var canChat: Bool { inferenceOK }
-
     /// Single accurate path label for hex / strip (never "ONLINE" + "OFF" together)
     var pathBadge: String {
         if isStreaming { return "LIT" }
