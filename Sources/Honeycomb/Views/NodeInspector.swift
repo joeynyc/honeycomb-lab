@@ -8,7 +8,17 @@ struct NodeInspector: View {
     let onRefresh: () -> Void
     let onSSH: () -> Void
     @State private var ping = PingService()
-    @State private var pendingAction: String?
+    /// Captured at button press so dialog dismiss can't race the confirm action.
+    @State private var pendingControl: ControlVerb?
+
+    private enum ControlVerb: String, Identifiable {
+        case start, stop
+        var id: String { rawValue }
+        var title: String { rawValue.uppercased() }
+        var confirmLabel: String {
+            self == .stop ? "Stop container" : "Start container"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -197,7 +207,7 @@ struct NodeInspector: View {
         }
         .onChange(of: node.id) { _, _ in
             ping.clear()
-            pendingAction = nil
+            pendingControl = nil
         }
     }
 
@@ -237,44 +247,60 @@ struct NodeInspector: View {
                 .buttonStyle(.plain)
                 .disabled(busy)
             }
-            if let control, let target = control.target(for: node) {
+            if let control {
                 let busy = control.busyNodeID == node.id
-                if node.inferenceOK {
-                    Button { pendingAction = "stop" } label: {
+                // STOP whenever inference looks up and we can SSH — discovers the
+                // live container so fleet.json model name never has to match.
+                if node.inferenceOK, control.canStop(node) {
+                    Button { pendingControl = .stop } label: {
                         labelChip(busy ? "…" : "STOP", tint: LabTheme.alert)
                     }
                     .buttonStyle(.plain)
                     .disabled(busy)
-                } else {
-                    Button { pendingAction = "start" } label: {
+                } else if !node.inferenceOK, control.canStart(node) {
+                    Button { pendingControl = .start } label: {
                         labelChip(busy ? "…" : "SERVE")
                     }
                     .buttonStyle(.plain)
                     .disabled(busy)
                 }
+                let preferred = control.preferredContainer(for: node)
                 Color.clear
                     .frame(width: 0, height: 0)
+                    // `presenting:` snapshots the verb so dismiss can't race STOP→START.
                     .confirmationDialog(
-                        "\(pendingAction?.uppercased() ?? "") \(target.container) on \(node.name)?",
+                        "Confirm",
                         isPresented: Binding(
-                            get: { pendingAction != nil },
-                            set: { if !$0 { pendingAction = nil } }
+                            get: { pendingControl != nil },
+                            set: { if !$0 { pendingControl = nil } }
                         ),
-                        titleVisibility: .visible
-                    ) {
-                        Button(pendingAction == "stop" ? "Stop container" : "Start container") {
-                            let action = pendingAction
-                            pendingAction = nil
+                        titleVisibility: .visible,
+                        presenting: pendingControl
+                    ) { verb in
+                        Button(verb.confirmLabel, role: verb == .stop ? .destructive : nil) {
                             Task {
-                                if action == "stop" {
-                                    await control.stop(node)
-                                } else {
-                                    await control.start(node)
+                                switch verb {
+                                case .stop: await control.stop(node)
+                                case .start: await control.start(node)
                                 }
                                 onRefresh()
                             }
                         }
-                        Button("Cancel", role: .cancel) { pendingAction = nil }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { verb in
+                        switch verb {
+                        case .stop:
+                            Text(
+                                preferred.map {
+                                    "Stop running inference on \(node.name)? Stops whatever vLLM container is up (fleet preferred: \($0))."
+                                } ?? "Stop running inference on \(node.name)?"
+                            )
+                        case .start:
+                            Text(
+                                preferred.map { "Start \($0) on \(node.name)?" }
+                                    ?? "Start container on \(node.name)?"
+                            )
+                        }
                     }
             }
         }

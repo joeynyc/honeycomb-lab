@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import threading
@@ -374,7 +373,16 @@ def snapshot(activity: dict[str, Any]) -> dict[str, Any]:
                 "doctor": doctor_report,
                 "canPing": bool(n.get("pingAlias")),
                 "canDoctor": bool(n.get("doctorCommand") and n.get("sshHost")),
-                "canControl": bool(n.get("container") and n.get("sshHost")),
+                # SERVE needs configured container; STOP needs SSH + docker-served node.
+                "canControl": bool(
+                    n.get("sshHost")
+                    and (n.get("container") or n.get("probe") == "vllm-ssh")
+                ),
+                "canStart": bool(n.get("container") and n.get("sshHost")),
+                "canStop": bool(
+                    n.get("sshHost")
+                    and (n.get("container") or n.get("probe") == "vllm-ssh")
+                ),
                 **st,
             }
         )
@@ -459,22 +467,87 @@ def action_doctor(node_id: str) -> dict[str, Any]:
     return {"ok": report["error"] is None, **report}
 
 
+def _running_inference_containers(docker_ps: str, preferred: str | None) -> list[str]:
+    """Names of running inference containers from `docker ps` Names\\tImage lines.
+
+    Host-network vLLM publishes no ports, so match image containing 'vllm',
+    plus the fleet preferred name when that container is running.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in docker_ps.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t", 1)
+        name = parts[0].strip()
+        if not name or name in seen:
+            continue
+        image = (parts[1] if len(parts) > 1 else "").lower()
+        is_vllm = "vllm" in image
+        is_preferred = preferred is not None and name == preferred
+        if is_vllm or is_preferred:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
 def action_container(node_id: str, verb: str) -> dict[str, Any]:
-    """docker start/stop of the node's configured container over SSH."""
+    """docker start/stop over SSH.
+
+    start — fleet.json container name only.
+    stop  — whatever vLLM container is actually running (not a stale preferred name).
+    """
     if verb not in ("start", "stop"):
         return {"ok": False, "error": "verb must be start or stop"}
     node = _find_node(node_id)
-    if not node or not (node.get("container") and node.get("sshHost")):
-        return {"ok": False, "error": "node has no container"}
+    if not node or not node.get("sshHost"):
+        return {"ok": False, "error": "node has no sshHost"}
+    host = node["sshHost"]
+    preferred = node.get("container") or None
+
+    if verb == "start":
+        if not preferred:
+            return {"ok": False, "error": "node has no container (SERVE target)"}
+        # Do not shell-quote: argv is passed as a single docker argument (no shell).
+        code, out = _run(
+            ["ssh", *SSH_OPTS, "--", host, "docker", "start", preferred],
+            timeout=40,
+        )
+        if code == 0:
+            return {
+                "ok": True,
+                "message": "container starting — model load takes a few minutes",
+            }
+        return {"ok": False, "error": f"start failed (exit {code}) {out.strip()[:120]}"}
+
+    # stop — discover live inference containers first
     code, out = _run(
-        ["ssh", *SSH_OPTS, "--", node["sshHost"], "docker", verb, shlex.quote(node["container"])],
-        timeout=60 if verb == "stop" else 40,
+        [
+            "ssh",
+            *SSH_OPTS,
+            "--",
+            host,
+            "docker",
+            "ps",
+            "--format",
+            "{{.Names}}\t{{.Image}}",
+        ],
+        timeout=20,
+    )
+    if code != 0:
+        return {"ok": False, "error": f"docker ps failed (exit {code}) {out.strip()[:120]}"}
+
+    targets = _running_inference_containers(out, preferred)
+    if not targets and preferred:
+        targets = [preferred]
+    if not targets:
+        return {"ok": True, "message": "no inference container running"}
+
+    code, out = _run(
+        ["ssh", *SSH_OPTS, "--", host, "docker", "stop", *targets],
+        timeout=60,
     )
     if code == 0:
-        msg = (
-            "container starting — model load takes a few minutes"
-            if verb == "start"
-            else "container stopped"
-        )
-        return {"ok": True, "message": msg}
-    return {"ok": False, "error": f"{verb} failed (exit {code}) {out.strip()[:120]}"}
+        return {"ok": True, "message": f"stopped {', '.join(targets)}"}
+    return {"ok": False, "error": f"stop failed (exit {code}) {out.strip()[:120]}"}

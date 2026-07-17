@@ -143,4 +143,32 @@ enum ProbeParsers {
         }
         return []
     }
+
+    /// Running inference container names from `docker ps --format '{{.Names}}\t{{.Image}}'`.
+    ///
+    /// Picks containers whose image looks like vLLM (host-network boxes publish no ports,
+    /// so we can't filter on publish=8000). Also includes `preferred` when that name is
+    /// present and running — so a non-vLLM configured serve target still stops cleanly.
+    static func runningInferenceContainers(
+        dockerPs: String,
+        preferred: String? = nil
+    ) -> [String] {
+        var names: [String] = []
+        var seen = Set<String>()
+        for line in dockerPs.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let parts = trimmed.split(separator: "\t", maxSplits: 1).map(String.init)
+            let name = parts[0].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !seen.contains(name) else { continue }
+            let image = parts.count > 1 ? parts[1].lowercased() : ""
+            let isVLLM = image.contains("vllm")
+            let isPreferred = preferred.map { name == $0 } ?? false
+            if isVLLM || isPreferred {
+                seen.insert(name)
+                names.append(name)
+            }
+        }
+        return names
+    }
 }

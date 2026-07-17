@@ -927,10 +927,11 @@
     if (node.canDoctor) {
       row.appendChild(chipButton(as.doctorBusy ? "DOCTOR…" : "DOCTOR", as.doctorBusy, function () { doDoctor(node.id); }));
     }
-    if (node.canControl && !node.inferenceOK) {
+    // SERVE needs fleet container; STOP discovers whatever vLLM is running.
+    if (node.canStart && !node.inferenceOK) {
       row.appendChild(chipButton(as.ctrlBusy ? "SERVE…" : "SERVE", as.ctrlBusy, function () { doContainer(node.id, "start", node.name); }, "green"));
     }
-    if (node.canControl && node.inferenceOK) {
+    if (node.canStop && node.inferenceOK) {
       row.appendChild(chipButton(as.ctrlBusy ? "STOP…" : "STOP", as.ctrlBusy, function () { doContainer(node.id, "stop", node.name); }, "red"));
     }
     return row;

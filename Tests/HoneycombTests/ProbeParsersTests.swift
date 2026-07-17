@@ -157,4 +157,46 @@ final class ProbeParsersTests: XCTestCase {
     func testModelsGarbage() {
         XCTAssertEqual(ProbeParsers.models(from: Data("not json".utf8)), [])
     }
+
+    // MARK: - docker ps (running inference containers)
+
+    private let dockerPsMixed = """
+    agents-a1-nvfp4\tnvcr.io/nvidia/vllm:26.06-py3
+    minimax-model-nfs\tgists/nfs-server:latest
+    hermes-firecrawl-api\tghcr.io/firecrawl/firecrawl:latest
+    hermes-searxng\tsearxng/searxng:latest
+    """
+
+    func testRunningInferencePicksVLLMOnly() {
+        let names = ProbeParsers.runningInferenceContainers(dockerPs: dockerPsMixed)
+        XCTAssertEqual(names, ["agents-a1-nvfp4"])
+    }
+
+    func testRunningInferenceIncludesPreferredNonVLLM() {
+        let names = ProbeParsers.runningInferenceContainers(
+            dockerPs: dockerPsMixed,
+            preferred: "hermes-searxng"
+        )
+        XCTAssertEqual(names, ["agents-a1-nvfp4", "hermes-searxng"])
+    }
+
+    func testRunningInferencePreferredNotRunningIgnored() {
+        let names = ProbeParsers.runningInferenceContainers(
+            dockerPs: dockerPsMixed,
+            preferred: "nemotron-puzzle-75b"
+        )
+        XCTAssertEqual(names, ["agents-a1-nvfp4"])
+    }
+
+    func testRunningInferenceEmpty() {
+        XCTAssertEqual(ProbeParsers.runningInferenceContainers(dockerPs: ""), [])
+    }
+
+    func testRunningInferenceCaseInsensitiveImage() {
+        let text = "qwen\tNVCR.IO/NVIDIA/VLLM:latest\n"
+        XCTAssertEqual(
+            ProbeParsers.runningInferenceContainers(dockerPs: text),
+            ["qwen"]
+        )
+    }
 }

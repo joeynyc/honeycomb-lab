@@ -158,7 +158,9 @@ var overrides the path). Start from `fleet.example.json`.
 
 **Per-node fields:** `gatewayBackend` + `litAliases` map the node to a
 gateway backend so its hex lights on traffic; `pingAlias` enables PING;
-`container` (+ `sshHost`) enables SERVE/STOP; `doctorCommand` enables
+`container` (+ `sshHost`) enables SERVE (starts that name); STOP discovers
+whatever vLLM container is actually running so model swaps still stop cleanly.
+`doctorCommand` enables
 DOCTOR; `hub: true` marks the center node; `axial: [q, r]` pins the map
 position; top-level `links` adds extra edges between nodes.
 
