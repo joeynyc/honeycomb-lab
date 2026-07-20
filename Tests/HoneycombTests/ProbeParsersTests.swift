@@ -199,4 +199,38 @@ final class ProbeParsersTests: XCTestCase {
             ["qwen"]
         )
     }
+
+    // MARK: - vLLM API port (docker inspect Entrypoint/Cmd)
+
+    func testVLLMPortFromArgArrayCmd() {
+        let text = #"null ["vllm","serve","deepseek-ai/DeepSeek-V4","--port","8888","--host","0.0.0.0"]"#
+        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 8888)
+    }
+
+    func testVLLMPortInsideBashWrapperString() {
+        // bash -lc serve script: the whole command line is one escaped JSON string
+        let text = #"null ["bash","-lc","export PATH=...; exec /usr/local/bin/vllm serve deepseek-ai/DeepSeek-V4-Flash-DSpark --port 8888 --tensor-parallel-size 2"]"#
+        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 8888)
+    }
+
+    func testVLLMPortEqualsForm() {
+        let text = #"["vllm","serve"] ["m","--port=9010"]"#
+        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 9010)
+    }
+
+    func testVLLMPortDefaultsTo8000WhenServePresentWithoutFlag() {
+        let text = #"null ["vllm","serve","meta-llama/Llama-3.3-70B"]"#
+        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 8000)
+    }
+
+    func testVLLMPortNilWhenNoVLLMCommand() {
+        XCTAssertNil(ProbeParsers.vllmAPIPort(fromDockerInspect: ""))
+        XCTAssertNil(ProbeParsers.vllmAPIPort(fromDockerInspect: #"null ["redis-server"]"#))
+    }
+
+    func testVLLMPortIgnoresGarbagePortValues() {
+        // out-of-range port falls back to the vLLM default, not nil
+        let text = #"null ["vllm","serve","m","--port","999999"]"#
+        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 8000)
+    }
 }

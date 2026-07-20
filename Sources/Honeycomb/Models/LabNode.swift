@@ -84,6 +84,20 @@ struct LabNode: Identifiable, Sendable, Equatable {
     var lastError: String?
     var isStreaming: Bool = false
 
+    /// vLLM API port discovered over SSH from the running container
+    /// (vllm-ssh probes only) — overrides the baseURL port when set.
+    var discoveredPort: Int?
+
+    /// Where inference actually answers: baseURL with any discovered port applied.
+    var inferenceBaseURL: URL {
+        guard let port = discoveredPort,
+              var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              comps.port != port
+        else { return baseURL }
+        comps.port = port
+        return comps.url ?? baseURL
+    }
+
     /// Real connection facts (filled by probe)
     var sshOK: Bool = false
     var dashboardOK: Bool = false
@@ -157,6 +171,7 @@ struct LabNode: Identifiable, Sendable, Equatable {
             && lhs.sshOK == rhs.sshOK
             && lhs.dashboardOK == rhs.dashboardOK
             && lhs.inferenceOK == rhs.inferenceOK
+            && lhs.discoveredPort == rhs.discoveredPort
             && lhs.statusDetail == rhs.statusDetail
     }
 }

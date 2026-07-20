@@ -171,4 +171,21 @@ enum ProbeParsers {
         }
         return names
     }
+
+    /// vLLM API port from `docker inspect --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}'`
+    /// output for the running inference container(s).
+    ///
+    /// Handles both arg-array form (`"--port","8888"`) and a `bash -lc "... vllm serve
+    /// ... --port 8888 ..."` wrapper (the flag lives inside one escaped string).
+    /// Returns 8000 (vLLM's default) when a vLLM serve is present without an explicit
+    /// port, nil when no vLLM command is visible at all — callers keep the configured
+    /// baseURL in that case.
+    static func vllmAPIPort(fromDockerInspect text: String) -> Int? {
+        let pattern = #/--port[="',\\ \t]+([0-9]{1,5})/#
+        if let match = text.firstMatch(of: pattern),
+           let port = Int(match.1), (1...65535).contains(port) {
+            return port
+        }
+        return text.lowercased().contains("vllm") ? 8000 : nil
+    }
 }

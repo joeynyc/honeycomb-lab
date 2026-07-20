@@ -109,6 +109,7 @@ final class HealthMonitor {
             nodes[idx].sshOK = result.sshOK
             nodes[idx].dashboardOK = result.dashboardOK
             nodes[idx].inferenceOK = result.inferenceOK
+            nodes[idx].discoveredPort = result.discoveredPort
             nodes[idx].statusDetail = result.detail
             nodes[idx].lastChecked = Date()
             nodes[idx].metrics = computeTokRate(id: id, metrics: result.metrics)
@@ -338,6 +339,7 @@ final class HealthMonitor {
         var inferenceOK: Bool
         var detail: String
         var metrics: NodeMetrics?
+        var discoveredPort: Int?
 
         init(
             health: NodeHealth,
@@ -348,7 +350,8 @@ final class HealthMonitor {
             dashboardOK: Bool,
             inferenceOK: Bool,
             detail: String,
-            metrics: NodeMetrics? = nil
+            metrics: NodeMetrics? = nil,
+            discoveredPort: Int? = nil
         ) {
             self.health = health
             self.latencyMs = latencyMs
@@ -359,11 +362,12 @@ final class HealthMonitor {
             self.inferenceOK = inferenceOK
             self.detail = detail
             self.metrics = metrics
+            self.discoveredPort = discoveredPort
         }
     }
 
     private nonisolated static func modelsURL(for node: LabNode) -> URL {
-        let base = node.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let base = node.inferenceBaseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let path = node.modelsPath.hasPrefix("/") ? node.modelsPath : "/" + node.modelsPath
         return URL(string: base + path) ?? node.baseURL.appendingPathComponent("v1/models")
     }
@@ -546,6 +550,34 @@ final class HealthMonitor {
         return ProbeParsers.hardwareMetrics(fromFreeAndSMI: result.output)
     }
 
+    /// The vLLM API port of whatever inference container is actually running,
+    /// read over SSH from the container's command line (`--port`, else vLLM's
+    /// default 8000). Serves can move ports between restarts; the configured
+    /// baseURL is only a fallback when nothing can be discovered.
+    private nonisolated static func discoverVLLMPort(
+        host: String,
+        preferredContainer: String?
+    ) async -> Int? {
+        // Host-network serves publish no ports, so match by name/image instead.
+        let safePreferred = preferredContainer.flatMap { name -> String? in
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+            return name.unicodeScalars.allSatisfy { allowed.contains($0) } ? name : nil
+        }
+        let cmd = "docker ps --format '{{.Names}} {{.Image}}'"
+            + " | awk -v pref='\(safePreferred ?? "")' 'tolower($0) ~ /vllm/ || (pref != \"\" && $1 == pref) {print $1}'"
+            + " | head -n 3"
+            + " | xargs -r docker inspect --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' 2>/dev/null"
+        let result = await SubprocessCache.shared.value(key: "vllmport:\(host)", ttl: 8) {
+            await Subprocess.run(
+                "/usr/bin/ssh",
+                ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "--", host, cmd],
+                timeout: 6
+            )
+        }
+        guard let result, result.status == 0 else { return nil }
+        return ProbeParsers.vllmAPIPort(fromDockerInspect: result.output)
+    }
+
     /// Parse the handful of vLLM Prometheus gauges the map cares about.
     private nonisolated static func fetchVLLMMetrics(
         node: LabNode,
@@ -553,7 +585,7 @@ final class HealthMonitor {
     ) async -> (kvCachePct: Double?, running: Int?, genTotal: Double?) {
         // Trim a trailing slash — "http://host:8000/" + "/metrics" would 404
         // and silently blank the metrics bars.
-        let base = node.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let base = node.inferenceBaseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let url = URL(string: base + "/metrics") else {
             return (nil, nil, nil)
         }
@@ -576,15 +608,24 @@ final class HealthMonitor {
             guard let url = node.dashboardURL else { return false }
             return await checkHTTPAlive(url: url, session: session)
         }()
-        async let inference: (Bool, [String], String?) = checkInference(node: node, session: session)
         async let hardware: NodeMetrics? = fetchHardwareMetrics(host: node.sshHost!)
+        async let port: Int? = discoverVLLMPort(
+            host: node.sshHost!,
+            preferredContainer: node.container
+        )
+
+        // Inference is checked wherever the running serve actually listens —
+        // configured baseURL is only the fallback when discovery comes up empty.
+        var effective = node
+        effective.discoveredPort = await port
+        let inference = await checkInference(node: effective, session: session)
 
         let (sshOK, sshErr) = await ssh
         let dashboardOK = await dash
-        let (inferenceOK, models, _) = await inference
+        let (inferenceOK, models, _) = inference
         var metrics = await hardware
         if inferenceOK {
-            let vllm = await fetchVLLMMetrics(node: node, session: session)
+            let vllm = await fetchVLLMMetrics(node: effective, session: session)
             if metrics == nil { metrics = NodeMetrics() }
             metrics?.kvCachePct = vllm.kvCachePct
             metrics?.runningRequests = vllm.running
@@ -644,7 +685,8 @@ final class HealthMonitor {
             dashboardOK: dashboardOK,
             inferenceOK: inferenceOK,
             detail: detail,
-            metrics: hostUp ? metrics : nil
+            metrics: hostUp ? metrics : nil,
+            discoveredPort: effective.discoveredPort
         )
     }
 
