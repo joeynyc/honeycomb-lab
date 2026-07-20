@@ -200,37 +200,81 @@ final class ProbeParsersTests: XCTestCase {
         )
     }
 
-    // MARK: - vLLM API port (docker inspect Entrypoint/Cmd)
+    // MARK: - Inference serve engine/port (docker inspect Entrypoint/Cmd)
 
-    func testVLLMPortFromArgArrayCmd() {
+    func testServePortFromArgArrayCmd() {
         let text = #"null ["vllm","serve","deepseek-ai/DeepSeek-V4","--port","8888","--host","0.0.0.0"]"#
-        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 8888)
+        let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
+        XCTAssertEqual(serve.engine, "vllm")
+        XCTAssertEqual(serve.port, 8888)
     }
 
-    func testVLLMPortInsideBashWrapperString() {
+    func testServePortInsideBashWrapperString() {
         // bash -lc serve script: the whole command line is one escaped JSON string
         let text = #"null ["bash","-lc","export PATH=...; exec /usr/local/bin/vllm serve deepseek-ai/DeepSeek-V4-Flash-DSpark --port 8888 --tensor-parallel-size 2"]"#
-        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 8888)
+        let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
+        XCTAssertEqual(serve.engine, "vllm")
+        XCTAssertEqual(serve.port, 8888)
     }
 
-    func testVLLMPortEqualsForm() {
+    func testServePortEqualsForm() {
         let text = #"["vllm","serve"] ["m","--port=9010"]"#
-        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 9010)
+        XCTAssertEqual(ProbeParsers.inferenceServe(fromDockerInspect: text).port, 9010)
     }
 
-    func testVLLMPortDefaultsTo8000WhenServePresentWithoutFlag() {
+    func testServeVLLMDefaultsTo8000WithoutFlag() {
         let text = #"null ["vllm","serve","meta-llama/Llama-3.3-70B"]"#
-        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 8000)
+        let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
+        XCTAssertEqual(serve.engine, "vllm")
+        XCTAssertEqual(serve.port, 8000)
     }
 
-    func testVLLMPortNilWhenNoVLLMCommand() {
-        XCTAssertNil(ProbeParsers.vllmAPIPort(fromDockerInspect: ""))
-        XCTAssertNil(ProbeParsers.vllmAPIPort(fromDockerInspect: #"null ["redis-server"]"#))
+    func testServeSGLangExplicitPort() {
+        let text = #"null ["python3","-m","sglang.launch_server","--model-path","Qwen/Qwen3-32B","--port","30001","--tp","2"]"#
+        let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
+        XCTAssertEqual(serve.engine, "sglang")
+        XCTAssertEqual(serve.port, 30001)
     }
 
-    func testVLLMPortIgnoresGarbagePortValues() {
-        // out-of-range port falls back to the vLLM default, not nil
+    func testServeSGLangDefaultsTo30000() {
+        let text = #"null ["bash","-lc","python3 -m sglang.launch_server --model-path Qwen/Qwen3-32B"]"#
+        let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
+        XCTAssertEqual(serve.engine, "sglang")
+        XCTAssertEqual(serve.port, 30000)
+    }
+
+    func testServeLlamaCppExplicitPort() {
+        let text = #"["/app/llama-server"] ["-m","/models/qwen.gguf","--port","9000","-ngl","99"]"#
+        let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
+        XCTAssertEqual(serve.engine, "llama.cpp")
+        XCTAssertEqual(serve.port, 9000)
+    }
+
+    func testServeLlamaCppDefaultsTo8080() {
+        let text = #"["/app/llama-server"] ["-m","/models/qwen.gguf"]"#
+        let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
+        XCTAssertEqual(serve.engine, "llama.cpp")
+        XCTAssertEqual(serve.port, 8080)
+    }
+
+    func testServeNilWhenNoKnownEngine() {
+        XCTAssertNil(ProbeParsers.inferenceServe(fromDockerInspect: "").port)
+        let serve = ProbeParsers.inferenceServe(fromDockerInspect: #"null ["redis-server"]"#)
+        XCTAssertNil(serve.engine)
+        XCTAssertNil(serve.port)
+    }
+
+    func testServeIgnoresGarbagePortValues() {
+        // out-of-range port falls back to the engine default, not nil
         let text = #"null ["vllm","serve","m","--port","999999"]"#
-        XCTAssertEqual(ProbeParsers.vllmAPIPort(fromDockerInspect: text), 8000)
+        XCTAssertEqual(ProbeParsers.inferenceServe(fromDockerInspect: text).port, 8000)
+    }
+
+    func testRunningInferenceMatchesSGLangAndLlamaImages() {
+        let text = "sg1\tlmsysorg/sglang:latest\ncpp1\tghcr.io/ggml-org/llama.cpp:server\nredis\tredis:7\n"
+        XCTAssertEqual(
+            ProbeParsers.runningInferenceContainers(dockerPs: text),
+            ["sg1", "cpp1"]
+        )
     }
 }

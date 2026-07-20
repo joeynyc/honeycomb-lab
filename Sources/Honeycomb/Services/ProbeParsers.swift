@@ -146,8 +146,9 @@ enum ProbeParsers {
 
     /// Running inference container names from `docker ps --format '{{.Names}}\t{{.Image}}'`.
     ///
-    /// Picks containers whose image looks like vLLM (host-network boxes publish no ports,
-    /// so we can't filter on publish=8000). Also includes `preferred` when that name is
+    /// Picks containers whose image looks like an inference engine (vLLM, SGLang,
+    /// llama.cpp — host-network boxes publish no ports, so we can't filter on
+    /// publish=8000). Also includes `preferred` when that name is
     /// present and running — so a non-vLLM configured serve target still stops cleanly.
     static func runningInferenceContainers(
         dockerPs: String,
@@ -162,9 +163,9 @@ enum ProbeParsers {
             let name = parts[0].trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty, !seen.contains(name) else { continue }
             let image = parts.count > 1 ? parts[1].lowercased() : ""
-            let isVLLM = image.contains("vllm")
+            let isInference = ["vllm", "sglang", "llama"].contains { image.contains($0) }
             let isPreferred = preferred.map { name == $0 } ?? false
-            if isVLLM || isPreferred {
+            if isInference || isPreferred {
                 seen.insert(name)
                 names.append(name)
             }
@@ -172,20 +173,39 @@ enum ProbeParsers {
         return names
     }
 
-    /// vLLM API port from `docker inspect --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}'`
-    /// output for the running inference container(s).
+    /// Inference engine + API port from `docker inspect --format
+    /// '{{json .Config.Entrypoint}} {{json .Config.Cmd}}'` output for the
+    /// running inference container(s).
     ///
     /// Handles both arg-array form (`"--port","8888"`) and a `bash -lc "... vllm serve
     /// ... --port 8888 ..."` wrapper (the flag lives inside one escaped string).
-    /// Returns 8000 (vLLM's default) when a vLLM serve is present without an explicit
-    /// port, nil when no vLLM command is visible at all — callers keep the configured
-    /// baseURL in that case.
-    static func vllmAPIPort(fromDockerInspect text: String) -> Int? {
+    /// An explicit `--port` always wins; otherwise the recognized engine's default
+    /// port is used (vLLM 8000, SGLang 30000, llama.cpp 8080). Both nil when no
+    /// known serve command is visible — callers keep the configured baseURL then.
+    static func inferenceServe(fromDockerInspect text: String) -> (engine: String?, port: Int?) {
+        let lowered = text.lowercased()
+        let engine: String?
+        let defaultPort: Int?
+        if lowered.contains("sglang") {
+            engine = "sglang"
+            defaultPort = 30000
+        } else if lowered.contains("vllm") {
+            engine = "vllm"
+            defaultPort = 8000
+        } else if lowered.contains("llama") {
+            // llama-server / llama.cpp / llamacpp images and binaries
+            engine = "llama.cpp"
+            defaultPort = 8080
+        } else {
+            engine = nil
+            defaultPort = nil
+        }
+
         let pattern = #/--port[="',\\ \t]+([0-9]{1,5})/#
         if let match = text.firstMatch(of: pattern),
            let port = Int(match.1), (1...65535).contains(port) {
-            return port
+            return (engine, port)
         }
-        return text.lowercased().contains("vllm") ? 8000 : nil
+        return (engine, defaultPort)
     }
 }

@@ -104,8 +104,8 @@ struct NodeInspector: View {
                     : "no chat API yet (load model on peer / start hub LMS)")
             case .vllmSSH:
                 row("INFER", node.inferenceOK
-                    ? "vLLM · \(Privacy.scrub(node.inferenceBaseURL.absoluteString))"
-                    : "idle (no vLLM serving)")
+                    ? "\(node.inferenceEngineLabel) · \(Privacy.scrub(node.inferenceBaseURL.absoluteString))"
+                    : "idle (nothing serving)")
             case .httpOnly:
                 row("INFER", node.inferenceOK
                     ? "API · \(Privacy.scrub(node.baseURL.absoluteString))"

@@ -84,9 +84,20 @@ struct LabNode: Identifiable, Sendable, Equatable {
     var lastError: String?
     var isStreaming: Bool = false
 
-    /// vLLM API port discovered over SSH from the running container
+    /// Inference API port discovered over SSH from the running container
     /// (vllm-ssh probes only) — overrides the baseURL port when set.
     var discoveredPort: Int?
+    /// Engine the running container was recognized as ("vllm", "sglang", "llama.cpp")
+    var discoveredEngine: String?
+
+    /// Display name for whatever engine is actually serving (vLLM until known).
+    var inferenceEngineLabel: String {
+        switch discoveredEngine {
+        case "sglang": return "SGLang"
+        case "llama.cpp": return "llama.cpp"
+        default: return "vLLM"
+        }
+    }
 
     /// Where inference actually answers: baseURL with any discovered port applied.
     var inferenceBaseURL: URL {
@@ -172,6 +183,7 @@ struct LabNode: Identifiable, Sendable, Equatable {
             && lhs.dashboardOK == rhs.dashboardOK
             && lhs.inferenceOK == rhs.inferenceOK
             && lhs.discoveredPort == rhs.discoveredPort
+            && lhs.discoveredEngine == rhs.discoveredEngine
             && lhs.statusDetail == rhs.statusDetail
     }
 }
