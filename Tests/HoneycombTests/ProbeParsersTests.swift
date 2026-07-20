@@ -205,7 +205,7 @@ final class ProbeParsersTests: XCTestCase {
     func testServePortFromArgArrayCmd() {
         let text = #"null ["vllm","serve","deepseek-ai/DeepSeek-V4","--port","8888","--host","0.0.0.0"]"#
         let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
-        XCTAssertEqual(serve.engine, "vllm")
+        XCTAssertEqual(serve.engine, .vllm)
         XCTAssertEqual(serve.port, 8888)
     }
 
@@ -213,7 +213,7 @@ final class ProbeParsersTests: XCTestCase {
         // bash -lc serve script: the whole command line is one escaped JSON string
         let text = #"null ["bash","-lc","export PATH=...; exec /usr/local/bin/vllm serve deepseek-ai/DeepSeek-V4-Flash-DSpark --port 8888 --tensor-parallel-size 2"]"#
         let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
-        XCTAssertEqual(serve.engine, "vllm")
+        XCTAssertEqual(serve.engine, .vllm)
         XCTAssertEqual(serve.port, 8888)
     }
 
@@ -225,35 +225,35 @@ final class ProbeParsersTests: XCTestCase {
     func testServeVLLMDefaultsTo8000WithoutFlag() {
         let text = #"null ["vllm","serve","meta-llama/Llama-3.3-70B"]"#
         let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
-        XCTAssertEqual(serve.engine, "vllm")
+        XCTAssertEqual(serve.engine, .vllm)
         XCTAssertEqual(serve.port, 8000)
     }
 
     func testServeSGLangExplicitPort() {
         let text = #"null ["python3","-m","sglang.launch_server","--model-path","Qwen/Qwen3-32B","--port","30001","--tp","2"]"#
         let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
-        XCTAssertEqual(serve.engine, "sglang")
+        XCTAssertEqual(serve.engine, .sglang)
         XCTAssertEqual(serve.port, 30001)
     }
 
     func testServeSGLangDefaultsTo30000() {
         let text = #"null ["bash","-lc","python3 -m sglang.launch_server --model-path Qwen/Qwen3-32B"]"#
         let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
-        XCTAssertEqual(serve.engine, "sglang")
+        XCTAssertEqual(serve.engine, .sglang)
         XCTAssertEqual(serve.port, 30000)
     }
 
     func testServeLlamaCppExplicitPort() {
         let text = #"["/app/llama-server"] ["-m","/models/qwen.gguf","--port","9000","-ngl","99"]"#
         let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
-        XCTAssertEqual(serve.engine, "llama.cpp")
+        XCTAssertEqual(serve.engine, .llamaCpp)
         XCTAssertEqual(serve.port, 9000)
     }
 
     func testServeLlamaCppDefaultsTo8080() {
         let text = #"["/app/llama-server"] ["-m","/models/qwen.gguf"]"#
         let serve = ProbeParsers.inferenceServe(fromDockerInspect: text)
-        XCTAssertEqual(serve.engine, "llama.cpp")
+        XCTAssertEqual(serve.engine, .llamaCpp)
         XCTAssertEqual(serve.port, 8080)
     }
 

@@ -300,7 +300,7 @@ final class HealthMonitor {
         // Fallback: Terminal.app
         let cmd: String
         if arguments.count >= 2, arguments[0] == "-e" {
-            cmd = arguments.dropFirst().map { shellEscape($0) }.joined(separator: " ")
+            cmd = arguments.dropFirst().map { Self.shellEscape($0) }.joined(separator: " ")
         } else {
             cmd = ""
         }
@@ -321,7 +321,7 @@ final class HealthMonitor {
         try? process.run()
     }
 
-    private func shellEscape(_ s: String) -> String {
+    private nonisolated static func shellEscape(_ s: String) -> String {
         if s.rangeOfCharacter(from: CharacterSet.alphanumerics.inverted) == nil {
             return s
         }
@@ -341,7 +341,7 @@ final class HealthMonitor {
         var detail: String
         var metrics: NodeMetrics?
         var discoveredPort: Int?
-        var discoveredEngine: String?
+        var discoveredEngine: InferenceEngine?
 
         init(
             health: NodeHealth,
@@ -354,7 +354,7 @@ final class HealthMonitor {
             detail: String,
             metrics: NodeMetrics? = nil,
             discoveredPort: Int? = nil,
-            discoveredEngine: String? = nil
+            discoveredEngine: InferenceEngine? = nil
         ) {
             self.health = health
             self.latencyMs = latencyMs
@@ -538,11 +538,27 @@ final class HealthMonitor {
         return ProbeParsers.lmStudioModelsOnDevice(in: text, device: device)
     }
 
-    /// GPU util + unified memory over SSH — one spawn, cached.
+    /// One SSH spawn, cached: GPU util + unified memory, plus the engine and
+    /// API port of whatever inference container is actually running (vLLM,
+    /// SGLang, llama.cpp) from its command line. Serves can move ports and
+    /// swap engines between restarts; the configured baseURL is only a
+    /// fallback when nothing can be discovered.
     /// GB10 nvidia-smi reports memory as N/A, so system memory is the truth.
-    private nonisolated static func fetchHardwareMetrics(host: String) async -> NodeMetrics? {
+    private nonisolated static func fetchHostProbe(
+        host: String,
+        preferredContainer: String?
+    ) async -> (metrics: NodeMetrics?, engine: InferenceEngine?, port: Int?) {
+        let marker = "==HONEYCOMB-DOCKER=="
+        // Host-network serves publish no ports, so match by name/image instead.
+        let engineTokens = InferenceEngine.allMatchTokens.joined(separator: "|")
         let cmd = "free -m | awk '/^Mem:/{print $3, $2}'; "
-            + "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits"
+            + "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits; "
+            + "echo \(marker); "
+            + "docker ps --format '{{.Names}} {{.Image}}'"
+            + " | awk -v pref=\(shellEscape(preferredContainer ?? "")) 'tolower($0) ~ /\(engineTokens)/ || (pref != \"\" && $1 == pref) {print $1}'"
+            + " | head -n 3"
+            + " | xargs -r docker inspect --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' 2>/dev/null"
+            + " || true"
         let result = await SubprocessCache.shared.value(key: "hw:\(host)", ttl: 8) {
             await Subprocess.run(
                 "/usr/bin/ssh",
@@ -550,36 +566,13 @@ final class HealthMonitor {
                 timeout: 6
             )
         }
-        guard let result, result.status == 0 else { return nil }
-        return ProbeParsers.hardwareMetrics(fromFreeAndSMI: result.output)
-    }
-
-    /// Engine + API port of whatever inference container is actually running
-    /// (vLLM, SGLang, llama.cpp), read over SSH from the container's command
-    /// line. Serves can move ports and swap engines between restarts; the
-    /// configured baseURL is only a fallback when nothing can be discovered.
-    private nonisolated static func discoverInferenceServe(
-        host: String,
-        preferredContainer: String?
-    ) async -> (engine: String?, port: Int?) {
-        // Host-network serves publish no ports, so match by name/image instead.
-        let safePreferred = preferredContainer.flatMap { name -> String? in
-            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-            return name.unicodeScalars.allSatisfy { allowed.contains($0) } ? name : nil
-        }
-        let cmd = "docker ps --format '{{.Names}} {{.Image}}'"
-            + " | awk -v pref='\(safePreferred ?? "")' 'tolower($0) ~ /vllm|sglang|llama/ || (pref != \"\" && $1 == pref) {print $1}'"
-            + " | head -n 3"
-            + " | xargs -r docker inspect --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' 2>/dev/null"
-        let result = await SubprocessCache.shared.value(key: "inferport:\(host)", ttl: 8) {
-            await Subprocess.run(
-                "/usr/bin/ssh",
-                ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "--", host, cmd],
-                timeout: 6
-            )
-        }
-        guard let result, result.status == 0 else { return (nil, nil) }
-        return ProbeParsers.inferenceServe(fromDockerInspect: result.output)
+        guard let result, result.status == 0 else { return (nil, nil, nil) }
+        let parts = result.output.components(separatedBy: marker)
+        let metrics = ProbeParsers.hardwareMetrics(fromFreeAndSMI: parts[0])
+        let serve = parts.count > 1
+            ? ProbeParsers.inferenceServe(fromDockerInspect: parts[1])
+            : (engine: nil, port: nil)
+        return (metrics, serve.engine, serve.port)
     }
 
     /// Parse the handful of vLLM Prometheus gauges the map cares about.
@@ -612,16 +605,13 @@ final class HealthMonitor {
             guard let url = node.dashboardURL else { return false }
             return await checkHTTPAlive(url: url, session: session)
         }()
-        async let hardware: NodeMetrics? = fetchHardwareMetrics(host: node.sshHost!)
-        async let serve: (engine: String?, port: Int?) = discoverInferenceServe(
-            host: node.sshHost!,
-            preferredContainer: node.container
-        )
+        async let hostProbe: (metrics: NodeMetrics?, engine: InferenceEngine?, port: Int?) =
+            fetchHostProbe(host: node.sshHost!, preferredContainer: node.container)
 
         // Inference is checked wherever the running serve actually listens —
         // configured baseURL is only the fallback when discovery comes up empty.
         var effective = node
-        let discovered = await serve
+        let discovered = await hostProbe
         effective.discoveredPort = discovered.port
         effective.discoveredEngine = discovered.engine
         let inference = await checkInference(node: effective, session: session)
@@ -629,7 +619,7 @@ final class HealthMonitor {
         let (sshOK, sshErr) = await ssh
         let dashboardOK = await dash
         let (inferenceOK, models, _) = inference
-        var metrics = await hardware
+        var metrics = discovered.metrics
         if inferenceOK {
             let vllm = await fetchVLLMMetrics(node: effective, session: session)
             if metrics == nil { metrics = NodeMetrics() }
@@ -647,7 +637,7 @@ final class HealthMonitor {
         if sshOK { parts.append("ssh") }
         if dashboardOK { parts.append("sync-dashboard") }
         if inferenceOK {
-            let engine = effective.discoveredEngine ?? "vllm"
+            let engine = (effective.discoveredEngine ?? .vllm).rawValue
             if models.isEmpty {
                 parts.append("\(engine) idle")
             } else if models.count == 1 {

@@ -87,23 +87,18 @@ struct LabNode: Identifiable, Sendable, Equatable {
     /// Inference API port discovered over SSH from the running container
     /// (vllm-ssh probes only) — overrides the baseURL port when set.
     var discoveredPort: Int?
-    /// Engine the running container was recognized as ("vllm", "sglang", "llama.cpp")
-    var discoveredEngine: String?
+    /// Engine the running container was recognized as
+    var discoveredEngine: InferenceEngine?
 
     /// Display name for whatever engine is actually serving (vLLM until known).
     var inferenceEngineLabel: String {
-        switch discoveredEngine {
-        case "sglang": return "SGLang"
-        case "llama.cpp": return "llama.cpp"
-        default: return "vLLM"
-        }
+        (discoveredEngine ?? .vllm).displayLabel
     }
 
     /// Where inference actually answers: baseURL with any discovered port applied.
     var inferenceBaseURL: URL {
         guard let port = discoveredPort,
-              var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
-              comps.port != port
+              var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
         else { return baseURL }
         comps.port = port
         return comps.url ?? baseURL

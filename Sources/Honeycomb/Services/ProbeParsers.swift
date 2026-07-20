@@ -1,5 +1,49 @@
 import Foundation
 
+/// Engines the fleet can serve — the single source for container match
+/// tokens, default API ports, and display names. Case order is detection
+/// priority (a vLLM serve of a llama model must match vllm, not llama.cpp).
+enum InferenceEngine: String, CaseIterable, Sendable {
+    case sglang
+    case vllm
+    case llamaCpp = "llama.cpp"
+
+    /// Substrings that mark a container image/command as this engine.
+    var matchTokens: [String] {
+        switch self {
+        case .sglang: return ["sglang"]
+        case .vllm: return ["vllm"]
+        case .llamaCpp: return ["llama"]
+        }
+    }
+
+    /// Port the engine binds when launched without an explicit --port.
+    var defaultPort: Int {
+        switch self {
+        case .sglang: return 30000
+        case .vllm: return 8000
+        case .llamaCpp: return 8080
+        }
+    }
+
+    var displayLabel: String {
+        switch self {
+        case .sglang: return "SGLang"
+        case .vllm: return "vLLM"
+        case .llamaCpp: return "llama.cpp"
+        }
+    }
+
+    static let allMatchTokens = allCases.flatMap(\.matchTokens)
+
+    static func detect(in text: String) -> InferenceEngine? {
+        let lowered = text.lowercased()
+        return allCases.first { engine in
+            engine.matchTokens.contains { lowered.contains($0) }
+        }
+    }
+}
+
 /// Pure text/JSON parsers for probe output, split out of HealthMonitor so
 /// they can be unit-tested against fixtures without SSH or a live fleet.
 enum ProbeParsers {
@@ -163,7 +207,7 @@ enum ProbeParsers {
             let name = parts[0].trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty, !seen.contains(name) else { continue }
             let image = parts.count > 1 ? parts[1].lowercased() : ""
-            let isInference = ["vllm", "sglang", "llama"].contains { image.contains($0) }
+            let isInference = InferenceEngine.allMatchTokens.contains { image.contains($0) }
             let isPreferred = preferred.map { name == $0 } ?? false
             if isInference || isPreferred {
                 seen.insert(name)
@@ -179,33 +223,18 @@ enum ProbeParsers {
     ///
     /// Handles both arg-array form (`"--port","8888"`) and a `bash -lc "... vllm serve
     /// ... --port 8888 ..."` wrapper (the flag lives inside one escaped string).
-    /// An explicit `--port` always wins; otherwise the recognized engine's default
-    /// port is used (vLLM 8000, SGLang 30000, llama.cpp 8080). Both nil when no
-    /// known serve command is visible — callers keep the configured baseURL then.
-    static func inferenceServe(fromDockerInspect text: String) -> (engine: String?, port: Int?) {
-        let lowered = text.lowercased()
-        let engine: String?
-        let defaultPort: Int?
-        if lowered.contains("sglang") {
-            engine = "sglang"
-            defaultPort = 30000
-        } else if lowered.contains("vllm") {
-            engine = "vllm"
-            defaultPort = 8000
-        } else if lowered.contains("llama") {
-            // llama-server / llama.cpp / llamacpp images and binaries
-            engine = "llama.cpp"
-            defaultPort = 8080
-        } else {
-            engine = nil
-            defaultPort = nil
-        }
-
-        let pattern = #/--port[="',\\ \t]+([0-9]{1,5})/#
-        if let match = text.firstMatch(of: pattern),
+    /// An explicit `--port` always wins; otherwise the recognized engine's
+    /// default port is used. Both nil when no known serve command is visible —
+    /// callers keep the configured baseURL then.
+    static func inferenceServe(fromDockerInspect text: String) -> (engine: InferenceEngine?, port: Int?) {
+        let engine = InferenceEngine.detect(in: text)
+        if let match = text.firstMatch(of: portFlagPattern),
            let port = Int(match.1), (1...65535).contains(port) {
             return (engine, port)
         }
-        return (engine, defaultPort)
+        return (engine, engine?.defaultPort)
     }
+
+    // Regex isn't Sendable, but this one is immutable after init — safe to share.
+    nonisolated(unsafe) private static let portFlagPattern = #/--port[="',\\ \t]+([0-9]{1,5})/#
 }
