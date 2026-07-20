@@ -575,8 +575,9 @@ final class HealthMonitor {
         return (metrics, serve.engine, serve.port)
     }
 
-    /// Parse the handful of vLLM Prometheus gauges the map cares about.
-    private nonisolated static func fetchVLLMMetrics(
+    /// Parse the handful of engine Prometheus gauges the map cares about
+    /// (vLLM, SGLang, or llama.cpp /metrics).
+    private nonisolated static func fetchInferenceMetrics(
         node: LabNode,
         session: URLSession
     ) async -> (kvCachePct: Double?, running: Int?, genTotal: Double?) {
@@ -593,7 +594,7 @@ final class HealthMonitor {
               let text = String(data: data, encoding: .utf8)
         else { return (nil, nil, nil) }
 
-        return ProbeParsers.vllmMetrics(fromPrometheus: text)
+        return ProbeParsers.inferenceMetrics(fromPrometheus: text)
     }
 
     /// DGX-style node — SSH is the ground truth for "is the host connected?"
@@ -621,11 +622,11 @@ final class HealthMonitor {
         let (inferenceOK, models, _) = inference
         var metrics = discovered.metrics
         if inferenceOK {
-            let vllm = await fetchVLLMMetrics(node: effective, session: session)
+            let serve = await fetchInferenceMetrics(node: effective, session: session)
             if metrics == nil { metrics = NodeMetrics() }
-            metrics?.kvCachePct = vllm.kvCachePct
-            metrics?.runningRequests = vllm.running
-            metrics?.genTokensTotal = vllm.genTotal
+            metrics?.kvCachePct = serve.kvCachePct
+            metrics?.runningRequests = serve.running
+            metrics?.genTokensTotal = serve.genTotal
         }
 
         let elapsed = start.duration(to: .now)

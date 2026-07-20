@@ -109,7 +109,7 @@ final class ProbeParsersTests: XCTestCase {
         XCTAssertNil(metrics?.gpuUtilPct)
     }
 
-    // MARK: - vLLM /metrics (Prometheus)
+    // MARK: - engine /metrics (Prometheus)
 
     func testVLLMMetrics() {
         let prom = """
@@ -119,14 +119,40 @@ final class ProbeParsersTests: XCTestCase {
         vllm:num_requests_running{model_name="qwen2.5-7b"} 3.0
         vllm:generation_tokens_total{model_name="qwen2.5-7b"} 123456.0
         """
-        let m = ProbeParsers.vllmMetrics(fromPrometheus: prom)
+        let m = ProbeParsers.inferenceMetrics(fromPrometheus: prom)
         XCTAssertEqual(m.kvCachePct ?? 0, 42.0, accuracy: 0.001)
         XCTAssertEqual(m.running, 3)
         XCTAssertEqual(m.genTotal ?? 0, 123456.0, accuracy: 0.001)
     }
 
-    func testVLLMMetricsMissingGauges() {
-        let m = ProbeParsers.vllmMetrics(fromPrometheus: "# nothing here\n")
+    func testSGLangMetrics() {
+        let prom = """
+        # TYPE sglang:token_usage gauge
+        sglang:token_usage{model_name="qwen3-32b"} 0.17
+        sglang:num_running_reqs{model_name="qwen3-32b"} 2.0
+        sglang:cache_hit_rate{model_name="qwen3-32b"} 0.61
+        sglang:generation_tokens_total{model_name="qwen3-32b"} 98765.0
+        """
+        let m = ProbeParsers.inferenceMetrics(fromPrometheus: prom)
+        XCTAssertEqual(m.kvCachePct ?? 0, 17.0, accuracy: 0.001)
+        XCTAssertEqual(m.running, 2)
+        XCTAssertEqual(m.genTotal ?? 0, 98765.0, accuracy: 0.001)
+    }
+
+    func testLlamaCppMetrics() {
+        let prom = """
+        llamacpp:kv_cache_usage_ratio 0.25
+        llamacpp:requests_processing 1
+        llamacpp:tokens_predicted_total 4242
+        """
+        let m = ProbeParsers.inferenceMetrics(fromPrometheus: prom)
+        XCTAssertEqual(m.kvCachePct ?? 0, 25.0, accuracy: 0.001)
+        XCTAssertEqual(m.running, 1)
+        XCTAssertEqual(m.genTotal ?? 0, 4242.0, accuracy: 0.001)
+    }
+
+    func testInferenceMetricsMissingGauges() {
+        let m = ProbeParsers.inferenceMetrics(fromPrometheus: "# nothing here\n")
         XCTAssertNil(m.kvCachePct)
         XCTAssertNil(m.running)
         XCTAssertNil(m.genTotal)

@@ -34,6 +34,25 @@ enum InferenceEngine: String, CaseIterable, Sendable {
         }
     }
 
+    /// Prometheus gauge/counter names on the engine's /metrics endpoint.
+    /// kv is a 0–1 usage ratio for all three engines.
+    var metricNames: (kv: String, running: String, genTotal: String) {
+        switch self {
+        case .sglang:
+            return ("sglang:token_usage",
+                    "sglang:num_running_reqs",
+                    "sglang:generation_tokens_total")
+        case .vllm:
+            return ("vllm:kv_cache_usage_perc",
+                    "vllm:num_requests_running",
+                    "vllm:generation_tokens_total")
+        case .llamaCpp:
+            return ("llamacpp:kv_cache_usage_ratio",
+                    "llamacpp:requests_processing",
+                    "llamacpp:tokens_predicted_total")
+        }
+    }
+
     static let allMatchTokens = allCases.flatMap(\.matchTokens)
 
     static func detect(in text: String) -> InferenceEngine? {
@@ -133,22 +152,25 @@ enum ProbeParsers {
         return metrics
     }
 
-    /// The handful of vLLM Prometheus gauges the map cares about.
-    static func vllmMetrics(
+    /// The handful of engine Prometheus gauges the map cares about — vLLM,
+    /// SGLang, and llama.cpp names are all tried; the sets are disjoint.
+    static func inferenceMetrics(
         fromPrometheus text: String
     ) -> (kvCachePct: Double?, running: Int?, genTotal: Double?) {
-        func value(_ metric: String) -> Double? {
-            for line in text.components(separatedBy: .newlines)
-            where line.hasPrefix(metric) {
-                if let raw = line.split(separator: " ").last {
-                    return Double(raw)
+        func value(_ metrics: [String]) -> Double? {
+            for line in text.components(separatedBy: .newlines) {
+                for metric in metrics where line.hasPrefix(metric) {
+                    if let raw = line.split(separator: " ").last {
+                        return Double(raw)
+                    }
                 }
             }
             return nil
         }
-        let kv = value("vllm:kv_cache_usage_perc").map { $0 * 100 }
-        let running = value("vllm:num_requests_running").map { Int($0) }
-        let genTotal = value("vllm:generation_tokens_total")
+        let engines = InferenceEngine.allCases
+        let kv = value(engines.map(\.metricNames.kv)).map { $0 * 100 }
+        let running = value(engines.map(\.metricNames.running)).map { Int($0) }
+        let genTotal = value(engines.map(\.metricNames.genTotal))
         return (kv, running, genTotal)
     }
 
