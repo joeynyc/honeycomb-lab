@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -16,6 +17,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
+
+import engines
 
 FLEET_PATH = Path(
     os.environ.get(
@@ -88,59 +92,80 @@ def _http_models(base_url: str, models_path: str) -> tuple[bool, list[str], floa
         with urllib.request.urlopen(url, timeout=3.0) as resp:
             raw = resp.read()
         ms = (time.perf_counter() - t0) * 1000
-        data = json.loads(raw.decode() or "{}")
-        models = [m.get("id") for m in data.get("data", []) if m.get("id")]
-        return True, models, ms
+        return True, engines.models_from_json(raw), ms
     except Exception:
         return False, [], None
 
 
-def _ssh_metrics(host: str) -> dict[str, Any] | None:
+_DOCKER_MARKER = "==HONEYCOMB-DOCKER=="
+
+
+def _ssh_host_probe(
+    host: str, preferred: str | None
+) -> tuple[bool, dict[str, Any] | None, engines.Engine | None, int | None]:
+    """One SSH spawn, same as the Mac app: GPU util + memory, plus the engine
+    and API port of whatever inference container is actually running. Serves
+    can move ports and swap engines between restarts; the configured baseURL
+    is only a fallback when nothing can be discovered.
+    Returns (ssh_ok, metrics, engine, port)."""
+    tokens = "|".join(engines.ALL_MATCH_TOKENS)
     cmd = (
         "free -m | awk '/^Mem:/{print $3, $2}'; "
-        "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits"
+        "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits; "
+        f"echo {_DOCKER_MARKER}; "
+        "docker ps --format '{{.Names}} {{.Image}}'"
+        f" | awk -v pref={shlex.quote(preferred or '')}"
+        f" 'tolower($0) ~ /{tokens}/ || (pref != \"\" && $1 == pref) {{print $1}}'"
+        " | head -n 3"
+        " | xargs -r docker inspect --format"
+        " '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' 2>/dev/null"
+        " || true"
     )
     code, out = _run(["ssh", *SSH_OPTS, "--", host, cmd], timeout=7)
     if code != 0:
-        return None
-    lines = [l.strip() for l in out.splitlines() if l.strip()]
+        return False, None, None, None
+    parts = out.split(_DOCKER_MARKER)
+    lines = [l.strip() for l in parts[0].splitlines() if l.strip()]
     metrics: dict[str, Any] = {}
     if lines:
-        parts = lines[0].split()
-        if len(parts) == 2 and all(p.isdigit() for p in parts):
-            metrics["memUsedMB"] = int(parts[0])
-            metrics["memTotalMB"] = int(parts[1])
+        mem = lines[0].split()
+        if len(mem) == 2 and all(p.isdigit() for p in mem):
+            metrics["memUsedMB"] = int(mem[0])
+            metrics["memTotalMB"] = int(mem[1])
     if len(lines) > 1 and lines[1].lstrip("-").isdigit():
         metrics["gpuUtilPct"] = int(lines[1])
-    return metrics or None
+    engine, port = (
+        engines.serve_from_docker_inspect(parts[1]) if len(parts) > 1 else (None, None)
+    )
+    return True, metrics or None, engine, port
 
 
-def _vllm_metrics(base_url: str) -> dict[str, Any]:
+def _with_port(base_url: str, port: int | None) -> str:
+    """base_url with the discovered API port applied (host unchanged)."""
+    if not port:
+        return base_url
+    try:
+        parts = urlsplit(base_url)
+        host = parts.hostname or ""
+        if ":" in host:  # bare IPv6 needs brackets back
+            host = f"[{host}]"
+        return urlunsplit(
+            (parts.scheme, f"{host}:{port}", parts.path, parts.query, parts.fragment)
+        )
+    except Exception:
+        return base_url
+
+
+def _engine_metrics(base_url: str) -> dict[str, Any]:
+    """Engine Prometheus gauges (vLLM, SGLang, or llama.cpp /metrics)."""
     import urllib.request
 
-    out: dict[str, Any] = {}
     try:
         with urllib.request.urlopen(base_url.rstrip("/") + "/metrics", timeout=3.0) as resp:
             text = resp.read().decode()
     except Exception:
-        return out
-
-    def value(metric: str) -> float | None:
-        for line in text.splitlines():
-            if line.startswith(metric):
-                try:
-                    return float(line.rsplit(" ", 1)[1])
-                except Exception:
-                    return None
-        return None
-
-    kv = value("vllm:kv_cache_usage_perc")
-    if kv is not None:
-        out["kvCachePct"] = kv * 100
-    gen = value("vllm:generation_tokens_total")
-    if gen is not None:
-        out["genTokensTotal"] = gen
-    return out
+        return {}
+    return engines.metrics_from_prometheus(text)
 
 
 # node_id -> (timestamp, generation_tokens_total) for tok/s deltas
@@ -149,18 +174,21 @@ _gen_history: dict[str, tuple[float, float]] = {}
 
 def _probe_vllm_ssh(node: dict[str, Any]) -> dict[str, Any]:
     host = node.get("sshHost")
-    ssh_ok = False
-    if host:
-        code, _ = _run(["ssh", *SSH_OPTS, "--", host, "echo", "ok"], timeout=6)
-        ssh_ok = code == 0
-    infer_ok, models, latency = _http_models(node["baseURL"], node.get("modelsPath", "/v1/models"))
+    ssh_ok, metrics, engine, port = (
+        _ssh_host_probe(host, node.get("container") or None)
+        if host
+        else (False, None, None, None)
+    )
+    # Inference is checked wherever the running serve actually listens —
+    # the configured baseURL is only the fallback when discovery is empty.
+    base = _with_port(node["baseURL"], port)
+    infer_ok, models, latency = _http_models(base, node.get("modelsPath", "/v1/models"))
 
-    metrics = _ssh_metrics(host) if (host and ssh_ok) else None
     if infer_ok:
-        vm = _vllm_metrics(node["baseURL"])
-        if vm:
-            metrics = {**(metrics or {}), **vm}
-            gen = vm.get("genTokensTotal")
+        em = _engine_metrics(base)
+        if em:
+            metrics = {**(metrics or {}), **em}
+            gen = em.get("genTokensTotal")
             if gen is not None:
                 now = time.time()
                 with _lock:  # probes run concurrently in a thread pool
@@ -169,15 +197,17 @@ def _probe_vllm_ssh(node: dict[str, Any]) -> dict[str, Any]:
                 if prev and gen >= prev[1] and now - prev[0] > 0.5:
                     metrics["genTokPerSec"] = (gen - prev[1]) / (now - prev[0])
 
+    ename = engine.name if engine else "vllm"
     health = "online" if ssh_ok else ("online" if infer_ok else "offline")
     parts = []
     if ssh_ok:
         parts.append("ssh")
     if infer_ok:
-        parts.append("vllm · " + (models[0].split("/")[-1][:24] if models else "idle"))
+        parts.append(f"{ename} · " + (models[0].split("/")[-1][:24] if models else "idle"))
     else:
         parts.append("inference idle")
-    badge = "SSH+vLLM" if (ssh_ok and infer_ok) else ("SSH" if ssh_ok else ("API" if infer_ok else "DOWN"))
+    label = engine.label if engine else "vLLM"
+    badge = f"SSH+{label}" if (ssh_ok and infer_ok) else ("SSH" if ssh_ok else ("API" if infer_ok else "DOWN"))
     return {
         "health": health,
         "models": models,
@@ -467,36 +497,12 @@ def action_doctor(node_id: str) -> dict[str, Any]:
     return {"ok": report["error"] is None, **report}
 
 
-def _running_inference_containers(docker_ps: str, preferred: str | None) -> list[str]:
-    """Names of running inference containers from `docker ps` Names\\tImage lines.
-
-    Host-network vLLM publishes no ports, so match image containing 'vllm',
-    plus the fleet preferred name when that container is running.
-    """
-    names: list[str] = []
-    seen: set[str] = set()
-    for line in docker_ps.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("\t", 1)
-        name = parts[0].strip()
-        if not name or name in seen:
-            continue
-        image = (parts[1] if len(parts) > 1 else "").lower()
-        is_vllm = "vllm" in image
-        is_preferred = preferred is not None and name == preferred
-        if is_vllm or is_preferred:
-            seen.add(name)
-            names.append(name)
-    return names
-
-
 def action_container(node_id: str, verb: str) -> dict[str, Any]:
     """docker start/stop over SSH.
 
     start — fleet.json container name only.
-    stop  — whatever vLLM container is actually running (not a stale preferred name).
+    stop  — whatever inference container (vLLM, SGLang, llama.cpp) is
+    actually running, not a stale preferred name.
     """
     if verb not in ("start", "stop"):
         return {"ok": False, "error": "verb must be start or stop"}
@@ -538,7 +544,7 @@ def action_container(node_id: str, verb: str) -> dict[str, Any]:
     if code != 0:
         return {"ok": False, "error": f"docker ps failed (exit {code}) {out.strip()[:120]}"}
 
-    targets = _running_inference_containers(out, preferred)
+    targets = engines.running_inference_containers(out, preferred)
     if not targets and preferred:
         targets = [preferred]
     if not targets:
