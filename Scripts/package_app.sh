@@ -139,7 +139,7 @@ fi
 GATEWAY_SRC="$ROOT/gateway"
 if [[ -d "$GATEWAY_SRC" ]]; then
   mkdir -p "$APP/Contents/Resources/gateway"
-  for f in server.py nodes.py dashboard.html config.example.json start.sh README.md; do
+  for f in server.py nodes.py engines.py dashboard.html config.example.json start.sh README.md; do
     [[ -f "$GATEWAY_SRC/$f" ]] && cp "$GATEWAY_SRC/$f" "$APP/Contents/Resources/gateway/"
   done
   chmod +x "$APP/Contents/Resources/gateway/start.sh" 2>/dev/null || true
