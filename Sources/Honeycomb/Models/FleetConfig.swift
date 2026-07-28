@@ -178,15 +178,6 @@ enum FleetStore {
         )
     }
 
-    static var fleetFileURL: URL {
-        if let path = ProcessInfo.processInfo.environment["HONEYCOMB_FLEET"] {
-            return URL(fileURLWithPath: path)
-        }
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Honeycomb", isDirectory: true)
-            .appendingPathComponent("fleet.json")
-    }
-
     private static func loadConfig() -> (FleetConfig, [String]) {
         var problems: [String] = []
 
