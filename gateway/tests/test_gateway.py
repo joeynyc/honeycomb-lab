@@ -6,12 +6,14 @@ everything is asserted through actual HTTP. Stdlib only, like the gateway.
 Run: python3 -m unittest discover gateway/tests
 """
 
+import atexit
 import http.client
 import json
 import os
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 import urllib.error
@@ -53,6 +55,33 @@ class FakeBackend(BaseHTTPRequestHandler):
         self.server.received.append({"path": self.path, "payload": payload})
         if self.server.mode == "fail":
             self._json(500, {"error": {"message": "upstream exploded"}})
+            return
+        if payload.get("stream") and self.server.mode == "truncate_stream":
+            # Advertise more data than is sent so urllib raises IncompleteRead
+            # while the gateway is reading an already-started upstream stream.
+            body = b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(body) + 8192))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            self.close_connection = True
+            return
+        if payload.get("stream") and self.server.mode == "slow_stream":
+            # Keep producing full proxy-sized chunks long enough for a client
+            # disconnect to reach the gateway's downstream write path.
+            chunk = b"data: " + (b"x" * 4088) + b"\n\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            try:
+                for _ in range(200):
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                    time.sleep(0.01)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
         if payload.get("stream"):
             body = (
@@ -144,6 +173,16 @@ PORT = GATEWAY.server_address[1]
 BASE = f"http://127.0.0.1:{PORT}"
 
 
+def _cleanup_test_resources():
+    for srv in (GATEWAY, ALPHA, BETA):
+        srv.shutdown()
+        srv.server_close()
+    _TMP.cleanup()
+
+
+atexit.register(_cleanup_test_resources)
+
+
 def _clear_probe_cache():
     with server._probe_lock:
         server._probe_cache.clear()
@@ -162,7 +201,36 @@ def _request(method, path, body=None, headers=None, timeout=15):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, dict(resp.headers.items()), resp.read()
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers.items()), e.read()
+        try:
+            return e.code, dict(e.headers.items()), e.read()
+        finally:
+            e.close()
+
+
+def _wait_for_requests(count, timeout=2.0):
+    """Poll the public history endpoint until async request recording catches up."""
+    deadline = time.monotonic() + timeout
+    entries = []
+    while time.monotonic() < deadline:
+        _, _, raw = _request("GET", "/requests")
+        entries = json.loads(raw)["requests"]
+        if len(entries) >= count:
+            return entries
+        time.sleep(0.01)
+    return entries
+
+
+def _wait_for_stat(key, request_count=1, timeout=2.0):
+    """Poll the public health endpoint until cumulative stats catch up."""
+    deadline = time.monotonic() + timeout
+    stat = None
+    while time.monotonic() < deadline:
+        _, _, raw = _request("GET", "/health")
+        stat = json.loads(raw)["stats"].get(key)
+        if stat and stat["requests"] >= request_count:
+            return stat
+        time.sleep(0.01)
+    return stat
 
 
 class GatewayTestCase(unittest.TestCase):
@@ -172,6 +240,11 @@ class GatewayTestCase(unittest.TestCase):
             be.mode = "ok"
             be.received.clear()
         _clear_probe_cache()
+        # Isolate request history / cumulative stats between tests.
+        with server._requests_lock:
+            server._request_log.clear()
+        with server._stats_lock:
+            server._stats.clear()
 
 
 class Routing(GatewayTestCase):
@@ -295,6 +368,108 @@ class Streaming(GatewayTestCase):
         self.assertIn("data: [DONE]", text)
         self.assertTrue(ALPHA.received[-1]["payload"]["stream"])
 
+    def test_successful_stream_not_counted_as_error(self):
+        """Completed SSE streams must land in history/stats as success, not error.
+
+        Regression: record_request used status=None for streams, and
+        _update_stats treats None as an error.
+        """
+        status, _, raw = _request(
+            "POST", "/v1/chat/completions",
+            {"model": "al", "stream": True, "messages": []},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("data: [DONE]", raw.decode())
+
+        _, _, hist_raw = _request("GET", "/requests")
+        entries = json.loads(hist_raw)["requests"]
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertTrue(entry["stream"])
+        self.assertEqual(entry["status"], 200)
+        self.assertEqual(entry["alias"], "al")
+        self.assertEqual(entry["backend"], "alpha")
+
+        _, _, health_raw = _request("GET", "/health")
+        stats = json.loads(health_raw)["stats"]
+        self.assertIn("al", stats)
+        self.assertEqual(stats["al"]["requests"], 1)
+        self.assertEqual(stats["al"]["errors"], 0)
+
+    def test_stream_upstream_http_error_counted(self):
+        ALPHA.mode = "fail"
+        status, _, _ = _request(
+            "POST", "/v1/chat/completions",
+            {"model": "al", "stream": True, "messages": []},
+        )
+        self.assertEqual(status, 500)
+
+        entries = _wait_for_requests(1)
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0]["stream"])
+        self.assertEqual(entries[0]["status"], 500)
+
+        stat = _wait_for_stat("al")
+        self.assertIsNotNone(stat)
+        self.assertEqual(stat["requests"], 1)
+        self.assertEqual(stat["errors"], 1)
+
+    def test_stream_client_disconnect_does_not_kill_gateway(self):
+        """Client hang-up mid-stream is normal; gateway keeps serving after."""
+        ALPHA.mode = "slow_stream"
+        body = json.dumps(
+            {"model": "al", "stream": True, "messages": []}
+        ).encode()
+        conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)
+        try:
+            conn.request(
+                "POST",
+                "/v1/chat/completions",
+                body=body,
+                headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+            )
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            # Read a little, then drop the client socket (BrokenPipe on server).
+            resp.read(8)
+            resp.close()
+        finally:
+            conn.close()
+
+        # The slow upstream takes ~2 seconds to finish normally. Recording
+        # promptly proves the gateway observed the downstream disconnect.
+        entries = _wait_for_requests(1, timeout=1.0)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["status"], 200)
+        self.assertTrue(entries[0]["stream"])
+
+        # Gateway must still answer subsequent requests.
+        ALPHA.mode = "ok"
+        status, _, raw = _request(
+            "POST", "/v1/chat/completions",
+            {"model": "al", "messages": []},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["served_by"], "alpha")
+
+    def test_midstream_upstream_failure_counted_as_error(self):
+        ALPHA.mode = "truncate_stream"
+        status, _, _ = _request(
+            "POST", "/v1/chat/completions",
+            {"model": "al", "stream": True, "messages": []},
+        )
+        # Upstream 200 headers were already forwarded before its body failed.
+        self.assertEqual(status, 200)
+
+        entries = _wait_for_requests(1)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["status"], 502)
+
+        stat = _wait_for_stat("al")
+        self.assertIsNotNone(stat)
+        self.assertEqual(stat["requests"], 1)
+        self.assertEqual(stat["errors"], 1)
+
 
 class ModelsListing(GatewayTestCase):
     def test_merge_models_lists_dynamic_aliases_and_upstreams(self):
@@ -313,9 +488,150 @@ class RequestValidation(GatewayTestCase):
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 status = resp.status
+                raw = resp.read()
         except urllib.error.HTTPError as e:
-            status = e.code
+            try:
+                status = e.code
+                raw = e.read()
+            finally:
+                e.close()
         self.assertEqual(status, 400)
+        self.assertIn("error", json.loads(raw))
+
+    def _assert_structured_400(self, status, raw, *, substring=None):
+        self.assertEqual(status, 400)
+        data = json.loads(raw)
+        self.assertIsInstance(data, dict)
+        self.assertIn("error", data)
+        self.assertIsInstance(data["error"], dict)
+        self.assertIn("message", data["error"])
+        if substring:
+            self.assertIn(substring, data["error"]["message"].lower())
+
+    def test_json_array_body_400_chat(self):
+        """Valid JSON of the wrong top-level shape must not drop the connection."""
+        status, _, raw = _request(
+            "POST", "/v1/chat/completions", [{"role": "user", "content": "hi"}]
+        )
+        self._assert_structured_400(status, raw, substring="object")
+        self.assertEqual(len(ALPHA.received), 0)
+
+    def test_json_string_body_400_embeddings(self):
+        status, _, raw = _request("POST", "/v1/embeddings", "not-an-object")
+        self._assert_structured_400(status, raw, substring="object")
+        self.assertEqual(len(ALPHA.received), 0)
+
+    def test_json_number_body_400_completions(self):
+        status, _, raw = _request("POST", "/v1/completions", 42)
+        self._assert_structured_400(status, raw, substring="object")
+        self.assertEqual(len(ALPHA.received), 0)
+
+    def test_non_string_model_400(self):
+        for bad_model in (123, True, ["al"], {"id": "al"}):
+            with self.subTest(model=bad_model):
+                status, _, raw = _request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": bad_model, "messages": []},
+                )
+                self._assert_structured_400(status, raw, substring="model")
+                self.assertEqual(len(ALPHA.received), 0)
+
+    def test_null_model_falls_back_to_default(self):
+        # null/omitted model is allowed — gateway fills default_model.
+        status, _, raw = _request(
+            "POST", "/v1/chat/completions", {"model": None, "messages": []}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["served_by"], "alpha")
+
+    def test_control_wrong_shape_400(self):
+        for body in (["nope"], "nope", 7):
+            with self.subTest(body=body):
+                status, headers, raw = _request("POST", "/control/ping", body)
+                self._assert_structured_400(status, raw, substring="object")
+                # Control error responses never carry CORS.
+                self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_control_invalid_json_400(self):
+        req = urllib.request.Request(
+            BASE + "/control/ping", data=b"{not json", method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                status = resp.status
+                raw = resp.read()
+                headers = dict(resp.headers.items())
+        except urllib.error.HTTPError as e:
+            try:
+                status = e.code
+                raw = e.read()
+                headers = dict(e.headers.items())
+            finally:
+                e.close()
+        self.assertEqual(status, 400)
+        self.assertIn("error", json.loads(raw))
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_invalid_utf8_400(self):
+        for path in ("/v1/chat/completions", "/control/ping"):
+            with self.subTest(path=path):
+                req = urllib.request.Request(BASE + path, data=b"\xff\xfe", method="POST")
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        status = resp.status
+                        headers = dict(resp.headers.items())
+                        raw = resp.read()
+                except urllib.error.HTTPError as e:
+                    try:
+                        status = e.code
+                        headers = dict(e.headers.items())
+                        raw = e.read()
+                    finally:
+                        e.close()
+                self._assert_structured_400(status, raw, substring="invalid json")
+                if path.startswith("/control/"):
+                    self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_oversized_json_integer_400(self):
+        # Python rejects integers beyond its conversion limit with ValueError;
+        # that parser failure must still become a structured client response.
+        raw_body = b'{"model":' + (b"9" * 10000) + b',"messages":[]}'
+        req = urllib.request.Request(
+            BASE + "/v1/chat/completions", data=raw_body, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                status = resp.status
+                raw = resp.read()
+        except urllib.error.HTTPError as e:
+            try:
+                status = e.code
+                raw = e.read()
+            finally:
+                e.close()
+        self._assert_structured_400(status, raw, substring="invalid json")
+
+    def test_control_body_read_errors_carry_no_cors(self):
+        cases = (
+            ("not-a-number", 400),
+            ("-1", 400),
+            (str(64 * 1024 * 1024), 413),
+        )
+        for content_length, expected in cases:
+            with self.subTest(content_length=content_length):
+                conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)
+                try:
+                    conn.putrequest("POST", "/control/ping")
+                    conn.putheader("Content-Length", content_length)
+                    conn.endheaders()
+                    resp = conn.getresponse()
+                    headers = dict(resp.headers.items())
+                    self.assertEqual(resp.status, expected)
+                    self.assertNotIn("Access-Control-Allow-Origin", headers)
+                    self.assertIn("error", json.loads(resp.read()))
+                finally:
+                    conn.close()
 
     def test_oversized_body_413(self):
         conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)

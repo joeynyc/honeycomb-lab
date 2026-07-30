@@ -266,7 +266,10 @@ def http_json(
             raw = resp.read()
             return resp.status, dict(resp.headers.items()), raw
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers.items()) if e.headers else {}, e.read()
+        try:
+            return e.code, dict(e.headers.items()) if e.headers else {}, e.read()
+        finally:
+            e.close()
     except Exception as e:
         return 0, {}, json.dumps({"error": {"message": str(e), "type": "gateway_error"}}).encode()
 
@@ -535,19 +538,59 @@ class Handler(BaseHTTPRequestHandler):
 
     MAX_BODY_BYTES = 32 * 1024 * 1024  # plenty for chat payloads
 
-    def _read_body(self) -> bytes:
+    def _read_body(self, *, cors: bool = True) -> bytes | None:
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            self._send(400, json.dumps({"error": {"message": "bad Content-Length"}}).encode())
-            raise ConnectionAbortedError("bad content-length") from None
+            self._send(
+                400,
+                json.dumps({"error": {"message": "bad Content-Length"}}).encode(),
+                cors=cors,
+            )
+            self.close_connection = True
+            return None
         if n < 0:
-            n = 0
+            self._send(
+                400,
+                json.dumps({"error": {"message": "bad Content-Length"}}).encode(),
+                cors=cors,
+            )
+            self.close_connection = True
+            return None
         if n > self.MAX_BODY_BYTES:
             # Refuse to buffer absurd payloads into memory.
-            self._send(413, json.dumps({"error": {"message": "request too large"}}).encode())
-            raise ConnectionAbortedError("body too large")
+            self._send(
+                413,
+                json.dumps({"error": {"message": "request too large"}}).encode(),
+                cors=cors,
+            )
+            self.close_connection = True
+            return None
         return self.rfile.read(n) if n else b""
+
+    def _parse_json_object(self, raw: bytes, *, cors: bool = True) -> dict[str, Any] | None:
+        """Decode a JSON object body. Valid JSON of any other top-level shape
+        (array/string/number/null) is a structured 400 — never a dropped
+        connection. Returns None after sending the error response."""
+        try:
+            payload = json.loads(raw.decode() or "{}")
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            self._send(
+                400,
+                json.dumps({"error": {"message": "invalid json"}}).encode(),
+                cors=cors,
+            )
+            return None
+        if not isinstance(payload, dict):
+            self._send(
+                400,
+                json.dumps(
+                    {"error": {"message": "request body must be a JSON object"}}
+                ).encode(),
+                cors=cors,
+            )
+            return None
+        return payload
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
@@ -693,11 +736,11 @@ class Handler(BaseHTTPRequestHandler):
             if not self._control_authorized():
                 self._send(401, json.dumps({"error": {"message": "control token required"}}).encode(), cors=False)
                 return
-            raw = self._read_body()
-            try:
-                body = json.loads(raw.decode() or "{}")
-            except json.JSONDecodeError:
-                self._send(400, json.dumps({"error": {"message": "invalid json"}}).encode(), cors=False)
+            raw = self._read_body(cors=False)
+            if raw is None:
+                return
+            body = self._parse_json_object(raw, cors=False)
+            if body is None:
                 return
             node_id = str(body.get("node") or "")
             action = path.removeprefix("/control/")
@@ -723,17 +766,27 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         raw = self._read_body()
-        try:
-            payload = json.loads(raw.decode() or "{}")
-        except json.JSONDecodeError:
-            self._send(400, json.dumps({"error": {"message": "invalid json"}}).encode())
+        if raw is None:
+            return
+        payload = self._parse_json_object(raw)
+        if payload is None:
             return
 
         # "failover": true opts a non-stream request into backend retry on
         # upstream failure; pop it so it never reaches the upstream API.
         failover_requested = bool(payload.pop("failover", False))
 
-        model = payload.get("model") or DEFAULT_MODEL
+        raw_model = payload.get("model")
+        # Omitted / null model falls back to default_model. Any other non-string
+        # (number, bool, array, object) is a client error — resolve_model does
+        # string ops and would otherwise throw and drop the connection.
+        if raw_model is not None and not isinstance(raw_model, str):
+            self._send(
+                400,
+                json.dumps({"error": {"message": "model must be a string"}}).encode(),
+            )
+            return
+        model = raw_model or DEFAULT_MODEL
         bid, upstream, alias = resolve_model(model)
         if bid not in BACKENDS:
             self._send(
@@ -790,10 +843,12 @@ class Handler(BaseHTTPRequestHandler):
             activity_begin(bid, upstream, alias or model)
             t0 = time.perf_counter()
             try:
-                self._proxy_stream(target, body)
+                # Record the real HTTP status so successful streams are not
+                # counted as errors (status=None previously tripped is_error).
+                status = self._proxy_stream(target, body)
                 record_request(
                     alias or model, bid, upstream, True,
-                    None, (time.perf_counter() - t0) * 1000, None, None,
+                    status, (time.perf_counter() - t0) * 1000, None, None,
                 )
             finally:
                 activity_end(bid)
@@ -827,13 +882,21 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(status if status else 502, resp)
 
-    def _proxy_stream(self, url: str, body: bytes) -> None:
+    def _proxy_stream(self, url: str, body: bytes) -> int:
+        """Proxy an SSE stream. Returns the HTTP status to record in history/stats.
+
+        Success → upstream status (usually 200). Upstream HTTPError → e.code.
+        Client disconnect after headers → the status already sent (not an error).
+        Gateway failure before headers → 502.
+        """
         req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "text/event-stream")
         headers_sent = False
+        status = 502
         try:
             with urllib.request.urlopen(req, timeout=300.0) as resp:
+                status = resp.status
                 self.send_response(resp.status)
                 ctype = resp.headers.get("Content-Type", "text/event-stream")
                 self.send_header("Content-Type", ctype)
@@ -843,28 +906,56 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 headers_sent = True
                 while True:
-                    chunk = resp.read(4096)
+                    try:
+                        chunk = resp.read(4096)
+                    except Exception as e:
+                        # The upstream failed after its 200 headers. The client
+                        # response cannot be changed now, but accounting must
+                        # still mark the request as failed.
+                        log(f"stream upstream error after headers: {e}")
+                        return 502
                     if not chunk:
+                        # http.client may return EOF without raising even when
+                        # a declared Content-Length was not fully received.
+                        if resp.length not in (None, 0):
+                            log(
+                                "stream upstream ended early "
+                                f"({resp.length} bytes still expected)"
+                            )
+                            return 502
                         break
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        # The downstream client closed the chat. That is normal
+                        # cancellation, not an upstream inference failure.
+                        log("stream client disconnected")
+                        return status
+            return status
         except (BrokenPipeError, ConnectionResetError):
-            # Client hung up mid-stream (closed the chat) — normal, not an error.
+            # The client disconnected while response headers were being sent.
             log("stream client disconnected")
+            return status if headers_sent else 499
         except urllib.error.HTTPError as e:
-            err = e.read()
+            try:
+                err = e.read()
+            finally:
+                e.close()
             if not headers_sent:
                 self._send(e.code, err or json.dumps({"error": str(e)}).encode())
+            return e.code
         except Exception as e:
             # Once the 200 + headers are on the wire we can't send a second
             # response — just log and drop the connection.
             if headers_sent:
                 log(f"stream error after headers: {e}")
-            else:
-                self._send(
-                    502,
-                    json.dumps({"error": {"message": str(e), "type": "stream_error"}}).encode(),
-                )
+                return 502
+            self._send(
+                502,
+                json.dumps({"error": {"message": str(e), "type": "stream_error"}}).encode(),
+            )
+            return 502
 
 
 def main() -> None:
