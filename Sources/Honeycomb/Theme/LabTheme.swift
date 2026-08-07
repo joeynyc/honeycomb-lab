@@ -24,7 +24,6 @@ enum LabTheme {
     static let textMuted = Color(red: 0.35, green: 0.48, blue: 0.35)
     static let alert = Color(red: 1.0, green: 0.27, blue: 0.4)
 
-    static let mono: Font = .system(.body, design: .monospaced)
     static let monoSmall: Font = .system(size: 11, weight: .regular, design: .monospaced)
     static let monoTiny: Font = .system(size: 9, weight: .medium, design: .monospaced)
 }

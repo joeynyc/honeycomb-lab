@@ -155,17 +155,6 @@ struct LabNode: Identifiable, Sendable, Equatable {
         }
     }
 
-    var pathBadgeColor: Color {
-        if isStreaming { return LabTheme.phosphor }
-        switch pathBadge {
-        case "DOWN", "OFF": return LabTheme.alert
-        case "SSH": return LabTheme.amber
-        case "LM LINK", "SSH+vLLM", "LMS", "LIT", "API": return LabTheme.phosphorDim
-        case "HUB", "UP": return LabTheme.amber.opacity(0.9)
-        default: return LabTheme.dim
-        }
-    }
-
     static func == (lhs: LabNode, rhs: LabNode) -> Bool {
         lhs.id == rhs.id
             && lhs.health == rhs.health
