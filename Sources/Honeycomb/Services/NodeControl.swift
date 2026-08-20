@@ -21,7 +21,7 @@ final class NodeControl {
     private(set) var lastResult: ActionResult?
 
     /// STOP when SSH is available and this node is a docker-served box
-    /// (configured container and/or vLLM probe — not LM Link peers).
+    /// (configured container and/or SSH-serve probe — not LM Link peers).
     func canStop(_ node: LabNode) -> Bool {
         guard node.sshHost != nil else { return false }
         return node.container != nil || node.probe == .vllmSSH

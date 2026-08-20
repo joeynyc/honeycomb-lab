@@ -85,7 +85,7 @@ struct LabNode: Identifiable, Sendable, Equatable {
     var isStreaming: Bool = false
 
     /// Inference API port discovered over SSH from the running container
-    /// (vllm-ssh probes only) — overrides the baseURL port when set.
+    /// (SSH-serve probes only) — overrides the baseURL port when set.
     var discoveredPort: Int?
     /// Engine the running container was recognized as
     var discoveredEngine: InferenceEngine?
@@ -117,7 +117,7 @@ struct LabNode: Identifiable, Sendable, Equatable {
                 switch probe {
                 case .lmstudioHub: return "control plane"
                 case .lmlinkPeer: return "LM Link · no model loaded"
-                case .vllmSSH: return sshHost != nil ? "connected · no vLLM" : "connected"
+                case .vllmSSH: return sshHost != nil ? "connected · nothing serving" : "connected"
                 case .httpOnly: return "connected"
                 }
             }
@@ -147,7 +147,7 @@ struct LabNode: Identifiable, Sendable, Equatable {
             return inferenceOK ? "LMS" : "HUB"
         case .vllmSSH:
             if health == .offline { return "DOWN" }
-            if inferenceOK { return "SSH+vLLM" }
+            if inferenceOK { return "SSH+\(inferenceEngineLabel)" }
             if sshOK || dashboardOK { return "SSH" }
             return "DOWN"
         case .httpOnly:

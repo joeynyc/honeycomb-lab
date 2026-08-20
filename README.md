@@ -149,8 +149,10 @@ Nodes are described in `~/Library/Application Support/Honeycomb/fleet.json`
 var overrides the path). Start from `fleet.example.json`.
 
 **Probe types:**
-- `vllm-ssh` — a GPU box running vLLM; SSH reachability = online, metrics
-  via `nvidia-smi`/`free`, throughput via vLLM's `/metrics`.
+- `vllm-ssh` (alias `ssh-serve`) — a GPU box reached over SSH. Host up =
+  SSH; the running serve (vLLM, SGLang, or llama.cpp) is discovered from
+  docker, including its API port and `/metrics`. Existing `fleet.json`
+  files keep using `vllm-ssh`.
 - `lmstudio-hub` — the hub itself, serving via LM Studio.
 - `lmlink-peer` — a remote GPU reached through the hub's LM Studio via
   LM Link (`lmLinkPeer` = the peer's device name).
@@ -159,7 +161,7 @@ var overrides the path). Start from `fleet.example.json`.
 **Per-node fields:** `gatewayBackend` + `litAliases` map the node to a
 gateway backend so its hex lights on traffic; `pingAlias` enables PING;
 `container` (+ `sshHost`) enables SERVE (starts that name); STOP discovers
-whatever vLLM container is actually running so model swaps still stop cleanly.
+whatever inference container is actually running so model swaps still stop cleanly.
 `doctorCommand` enables
 DOCTOR; `hub: true` marks the center node; `axial: [q, r]` pins the map
 position; top-level `links` adds extra edges between nodes.
@@ -187,7 +189,7 @@ trend, traffic feed, and PING/DOCTOR/SERVE/STOP.
 
 ## spark-doctor integration
 
-Give any `vllm-ssh` node a `doctorCommand` that prints a
+Give any SSH-serve node (`vllm-ssh` / `ssh-serve`) a `doctorCommand` that prints a
 [spark-doctor](https://github.com/joeynyc/spark-doctor) scan JSON to
 stdout, and Honeycomb runs it on demand (DOCTOR button) and automatically
 when inference dies or the node drops — findings render right in the

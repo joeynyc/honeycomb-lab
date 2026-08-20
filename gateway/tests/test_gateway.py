@@ -294,6 +294,35 @@ class Routing(GatewayTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(ALPHA.received[-1]["path"], "/v1/embeddings")
 
+    def test_unknown_model_does_not_prefer_gx10(self):
+        """A name that is not an alias must not special-case a lab backend id."""
+        original = dict(server.BACKENDS)
+        cheap = list(server.CHEAP_ORDER)
+        try:
+            server.BACKENDS["gx10"] = original["beta"]
+            # cheap_order still starts at alpha — gx10 being present must not win.
+            bid, upstream, alias = server.resolve_model("totally-unknown")
+            self.assertEqual(bid, "alpha")
+            self.assertEqual(upstream, "totally-unknown")
+            self.assertIsNone(alias)
+        finally:
+            server.BACKENDS.clear()
+            server.BACKENDS.update(original)
+            server.CHEAP_ORDER[:] = cheap
+
+    def test_cheap_order_omitted_follows_backend_declaration(self):
+        self.assertEqual(
+            server._cheap_order({}, {"lms": {}, "spark1": {}}),
+            ["lms", "spark1"],
+        )
+        self.assertEqual(
+            server._cheap_order(
+                {"cheap_order": ["spark1", "missing", "lms"]},
+                {"lms": {}, "spark1": {}},
+            ),
+            ["spark1", "lms"],
+        )
+
 
 class CheapAndFailover(GatewayTestCase):
     def test_cheap_resolves_to_first_healthy_backend(self):
@@ -739,6 +768,7 @@ class HealthEndpoint(GatewayTestCase):
             data["cheap"]["resolves_to"],
             {"backend": "alpha", "model": "alpha-chat"},
         )
+        self.assertNotIn("node_activity", data)
 
 
 if __name__ == "__main__":

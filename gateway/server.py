@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Honeycomb Lab gateway — single OpenAI-compatible front door on the Mac mini.
+"""Honeycomb Lab gateway — single OpenAI-compatible front door on the hub.
 
   GET  /health
   GET  /v1/models
@@ -60,12 +60,31 @@ def load_config() -> dict[str, Any]:
 CFG = load_config()
 BACKENDS: dict[str, dict[str, Any]] = CFG["backends"]
 ALIASES: dict[str, dict[str, Any]] = CFG.get("aliases", {})
-DEFAULT_MODEL = CFG.get("default_model", "spark-peer")
-# Cheapest-first backend order for the dynamic "cheap" alias — small local
-# model on the Mini before waking a Spark-class GPU.
-CHEAP_ORDER: list[str] = [
-    b for b in CFG.get("cheap_order", ["lms", "gx10", "joeydgx"]) if b in BACKENDS
-]
+
+
+def _configured_default_model() -> str:
+    """Config default_model, else the first named alias, else the cheap alias."""
+    if model := CFG.get("default_model"):
+        return str(model)
+    for name in ALIASES:
+        if name != "default":
+            return name
+    return "cheap"
+
+
+def _cheap_order(cfg: dict[str, Any], backends: dict[str, Any]) -> list[str]:
+    """cheap_order from config, else backends in declaration order.
+
+    Never invent lab-specific backend ids (gx10, joeydgx, …).
+    """
+    raw = cfg.get("cheap_order")
+    if raw:
+        return [b for b in raw if b in backends]
+    return list(backends)
+
+
+DEFAULT_MODEL = _configured_default_model()
+CHEAP_ORDER: list[str] = _cheap_order(CFG, BACKENDS)
 
 # Live traffic for Honeycomb "lit" hexes (thread-safe)
 _activity_lock = threading.Lock()
@@ -383,10 +402,10 @@ def resolve_model(model: str | None) -> tuple[str, str, str | None]:
     if model in BACKENDS:
         return model, "", None
 
-    # default: try gx10 then lms with original name
-    if "gx10" in BACKENDS:
-        return "gx10", model, None
-    return next(iter(BACKENDS)), model, None
+    # Unknown id: pass the name through to the first cheap_order backend
+    # (or the first configured backend). Do not special-case a lab name.
+    fallback = next(iter(CHEAP_ORDER), None) or next(iter(BACKENDS))
+    return fallback, model, None
 
 
 def merge_models() -> list[dict[str, Any]]:
@@ -643,23 +662,12 @@ class Handler(BaseHTTPRequestHandler):
                     "last_model": a.get("last_model"),
                     "last_alias": a.get("last_alias"),
                 }
-            # Map gateway backends → Honeycomb hex ids for the Mac app
-            node_activity = {
-                "gx10": act.get("gx10", {}).get("active", False),
-                "joeydgx": act.get("joeydgx", {}).get("active", False),
-                "mini": act.get("lms", {}).get("active", False),
-                "pc4080": bool(
-                    act.get("lms", {}).get("active")
-                    and str(act.get("lms", {}).get("last_alias") or "").startswith("pc")
-                ),
-            }
             payload = {
                 "status": "ok",
                 "service": "honeycomb-gateway",
                 "default_model": DEFAULT_MODEL,
                 "backends": backends,
                 "activity": act,
-                "node_activity": node_activity,
                 "active_window_sec": ACTIVE_WINDOW_SEC,
                 "aliases": {
                     k: v for k, v in ALIASES.items() if k != "default"
