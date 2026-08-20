@@ -41,6 +41,10 @@ _last_change: dict[str, float] = {}
 _doctor: dict[str, dict[str, Any]] = {}
 _pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="node-probe")
 HISTORY_WINDOW_SEC = 3600
+# Same TTL as the Mac app's SubprocessCache for `lms ps` / `lms link status` / `lms ls`.
+_LMS_CACHE_TTL_SEC = 15.0
+_lms_cache_lock = threading.Lock()
+_lms_cache: dict[str, tuple[float, str]] = {}
 
 
 def _lms_path() -> str | None:
@@ -68,6 +72,34 @@ def _run(cmd: list[str], timeout: float, merge_stderr: bool = False) -> tuple[in
         return proc.returncode, out
     except Exception:
         return -1, ""
+
+
+def _lms_output(args: list[str], timeout: float = 8.0) -> str:
+    """`lms` CLI stdout, cached across concurrent probes in one refresh.
+
+    Returns output even on a non-zero exit (the Mac app does the same) so
+    parsers still see "No models are currently loaded" and similar.
+    """
+    lms = _lms_path()
+    if not lms:
+        return ""
+    key = "\0".join(args)
+    now = time.time()
+    with _lms_cache_lock:
+        hit = _lms_cache.get(key)
+        if hit and now - hit[0] < _LMS_CACHE_TTL_SEC:
+            return hit[1]
+    _, out = _run([lms, *args], timeout=timeout, merge_stderr=True)
+    with _lms_cache_lock:
+        _lms_cache[key] = (now, out)
+    return out
+
+
+def _peer_names() -> list[str]:
+    """lmLinkPeer values on the current fleet — hub `lms ps` excludes these."""
+    with _lock:
+        nodes = list(_fleet.get("nodes") or [])
+    return [n["lmLinkPeer"] for n in nodes if n.get("lmLinkPeer")]
 
 
 def _load_fleet() -> dict[str, Any]:
@@ -220,13 +252,31 @@ def _probe_vllm_ssh(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def _probe_lmstudio_hub(node: dict[str, Any]) -> dict[str, Any]:
-    infer_ok, models, latency = _http_models(node["baseURL"], node.get("modelsPath", "/v1/models"))
-    chat_models = [m for m in models if "embed" not in m.lower()]
+    """Hub: HTTP is inference-up; models are `lms ps` loaded, not the catalog.
+
+    Same split as HealthMonitor.probeHub — never list a huge LM Studio disk
+    inventory, and skip rows that belong to an LM Link peer.
+    """
+    infer_ok, _, latency = _http_models(
+        node["baseURL"], node.get("modelsPath", "/v1/models")
+    )
+    loaded = engines.lm_studio_loaded_models(
+        _lms_output(["ps"]),
+        device_filter=None,
+        exclude_devices=_peer_names(),
+    )
+    link_ok = "status: online" in _lms_output(["link", "status"]).lower()
+    parts = ["hub"]
+    if link_ok:
+        parts.append("lm-link")
+    if infer_ok:
+        parts.append("lms :1234")
+    parts.append(f"{len(loaded)} loaded" if loaded else "no model loaded")
     return {
         "health": "online",  # the hub runs this gateway
-        "models": chat_models,
+        "models": loaded,
         "inferenceOK": infer_ok,
-        "detail": "hub · " + ("lms :1234" if infer_ok else "LM Studio server off"),
+        "detail": " · ".join(parts),
         "latencyMs": latency,
         "metrics": None,
         "pathBadge": "LMS" if infer_ok else "HUB",
@@ -234,38 +284,62 @@ def _probe_lmstudio_hub(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def _probe_lmlink_peer(node: dict[str, Any]) -> dict[str, Any]:
+    """Remote GPU behind LM Link — same facts as HealthMonitor.probeLMLinkPeer."""
     peer = node.get("lmLinkPeer") or node.get("hostname") or node["name"]
-    lms = _lms_path()
-    link_ok = False
-    loaded: list[str] = []
-    if lms:
-        code, out = _run([lms, "link", "status"], timeout=8, merge_stderr=True)
-        if code == 0:
-            low = out.lower()
-            link_ok = peer.lower() in low and ("connected" in low or "online" in low)
-        code, out = _run([lms, "ps"], timeout=8, merge_stderr=True)
-        if code == 0:
-            for line in out.splitlines():
-                if peer.lower() in line.lower():
-                    token = line.strip().split()
-                    if token and len(token[0]) > 2:
-                        loaded.append(token[0])
+    link_ok = engines.lm_link_peer_connected(
+        _lms_output(["link", "status"]), peer
+    )
+    loaded = engines.lm_studio_loaded_models(
+        _lms_output(["ps"]), device_filter=peer
+    )
+    disk = engines.lm_studio_models_on_device(_lms_output(["ls"]), peer)
+    infer_ok, _, latency = _http_models(
+        node["baseURL"], node.get("modelsPath", "/v1/models")
+    )
+
     ssh_ok = False
     host = node.get("sshHost")
-    if not link_ok and host:
+    if host:
         code, _ = _run(["ssh", *SSH_OPTS, "--", host, "echo", "ok"], timeout=6)
         ssh_ok = code == 0
+
     host_up = link_ok or ssh_ok
-    health = "online" if host_up else "offline"
-    detail = f"lm-link · {peer}" if link_ok else ("ssh only · link down" if ssh_ok else f"{peer} not in link mesh")
+    parts: list[str] = []
+    if link_ok:
+        parts.append("lm-link")
+    if ssh_ok:
+        parts.append("ssh")
+    if infer_ok:
+        parts.append("lms-api")
+    if loaded:
+        parts.append(f"{len(loaded)} loaded on {peer}")
+    elif disk:
+        parts.append(f"{len(disk)} on disk · none loaded")
+    else:
+        parts.append(f"no model loaded on {peer}")
+
+    if host_up:
+        detail = " · ".join(parts) if parts else "connected"
+    else:
+        detail = f"{peer} not in link mesh"
+
+    if not host_up:
+        badge = "DOWN"
+    elif link_ok:
+        badge = "LM LINK"
+    elif ssh_ok:
+        badge = "SSH"
+    else:
+        badge = "UP"
+
     return {
-        "health": health,
+        "health": "online" if host_up else "offline",
         "models": loaded,
-        "inferenceOK": link_ok,
-        "detail": detail + (f" · {len(loaded)} loaded" if loaded else ""),
-        "latencyMs": None,
+        "inferenceOK": infer_ok and link_ok,
+        "detail": detail,
+        "latencyMs": latency if host_up else None,
         "metrics": None,
-        "pathBadge": "LM LINK" if link_ok else ("SSH" if ssh_ok else "DOWN"),
+        "pathBadge": badge,
     }
 
 

@@ -3,7 +3,8 @@
 Python twin of the Swift app's InferenceEngine + ProbeParsers
 (Sources/Honeycomb/Services/ProbeParsers.swift) so the browser dashboard
 sees the same fleet the Mac app does. Keep the two in sync: match tokens,
-default ports, and metric names live here and there. Stdlib only.
+default ports, metric names, and lms CLI parsers live here and there.
+Stdlib only.
 """
 
 from __future__ import annotations
@@ -121,6 +122,73 @@ def running_inference_containers(
             seen.add(name)
             names.append(name)
     return names
+
+
+def lm_studio_loaded_models(
+    text: str,
+    device_filter: str | None = None,
+    exclude_devices: list[str] | None = None,
+) -> list[str]:
+    """Loaded models from `lms ps` output, optionally filtered by DEVICE.
+
+    Twin of ProbeParsers.lmStudioLoadedModels. Hub callers pass peer names in
+    exclude_devices so LM Link rows are not listed as local; peer callers pass
+    device_filter to keep only that peer's rows.
+    """
+    if "no models are currently loaded" in text.lower():
+        return []
+    found: list[str] = []
+    skip_prefixes = ("IDENTIFIER", "LLM", "EMBEDDING", "To load", "SIZE")
+    excluded = exclude_devices or []
+    for line in text.splitlines():
+        trimmed = line.strip()
+        if not trimmed or trimmed.startswith(skip_prefixes):
+            continue
+        if device_filter is not None:
+            if device_filter.lower() not in line.lower():
+                continue
+        elif any(d.lower() in line.lower() for d in excluded):
+            continue
+        parts = trimmed.split()
+        if parts and len(parts[0]) > 2:
+            found.append(parts[0])
+    return found
+
+
+def lm_link_peer_connected(text: str, name: str) -> bool:
+    """Whether `lms link status` shows the named peer as connected.
+
+    Twin of ProbeParsers.lmLinkPeerConnected: walk peer blocks (`- <name>`
+    then `Status: connected` / `online`). Fallback is name + "connected"
+    anywhere, so an unknown name does not inherit another peer's status.
+    """
+    in_peer = False
+    needle = name.lower()
+    for line in text.splitlines():
+        t = line.strip()
+        if t.startswith("- "):
+            in_peer = needle in t[2:].lower()
+        elif in_peer and t.lower().startswith("status:"):
+            low = t.lower()
+            return "connected" in low or "online" in low
+    low = text.lower()
+    return needle in low and "connected" in low
+
+
+def lm_studio_models_on_device(text: str, device: str) -> list[str]:
+    """Model ids listed under a remote device in `lms ls` (DEVICE column).
+
+    Twin of ProbeParsers.lmStudioModelsOnDevice.
+    """
+    found: list[str] = []
+    needle = device.lower()
+    for line in text.splitlines():
+        if needle not in line.lower():
+            continue
+        parts = line.split()
+        if parts and len(parts[0]) > 2 and not parts[0].startswith("LLM"):
+            found.append(parts[0])
+    return found
 
 
 def models_from_json(raw: bytes | str) -> list[str]:
