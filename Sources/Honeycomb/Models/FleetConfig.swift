@@ -3,7 +3,9 @@ import Foundation
 /// How a node is probed for health/models. This is the only thing the
 /// monitor switches on — no node IDs are special.
 enum ProbeKind: String, Codable, Sendable {
-    /// DGX-style: SSH is ground truth, vLLM :8000 checked separately
+    /// SSH is ground truth; the running serve (vLLM, SGLang, llama.cpp) is
+    /// discovered from docker. Stored as `vllm-ssh` in fleet.json; `ssh-serve`
+    /// is accepted as an alias.
     case vllmSSH = "vllm-ssh"
     /// The machine the app runs on, serving via LM Studio
     case lmstudioHub = "lmstudio-hub"
@@ -11,6 +13,14 @@ enum ProbeKind: String, Codable, Sendable {
     case lmlinkPeer = "lmlink-peer"
     /// Plain OpenAI-compatible HTTP endpoint
     case httpOnly = "http-only"
+
+    static let documentedNames = ["vllm-ssh", "ssh-serve", "lmstudio-hub", "lmlink-peer", "http-only"]
+
+    /// `ssh-serve` is the same path as historical `vllm-ssh`.
+    static func parse(_ raw: String) -> ProbeKind? {
+        if raw == "ssh-serve" { return .vllmSSH }
+        return ProbeKind(rawValue: raw)
+    }
 }
 
 /// fleet.json — the entire lab description. Lives in
@@ -114,13 +124,12 @@ enum FleetStore {
                 problems.append("“\(n.id)”: baseURL “\(n.baseURL)” is not a valid URL — skipped")
                 return nil
             }
-            guard let probe = ProbeKind(rawValue: n.probe) else {
-                let valid = ["vllm-ssh", "lmstudio-hub", "lmlink-peer", "http-only"]
-                problems.append("“\(n.id)”: unknown probe “\(n.probe)” (use \(valid.joined(separator: ", "))) — skipped")
+            guard let probe = ProbeKind.parse(n.probe) else {
+                problems.append("“\(n.id)”: unknown probe “\(n.probe)” (use \(ProbeKind.documentedNames.joined(separator: ", "))) — skipped")
                 return nil
             }
             if probe == .vllmSSH && n.sshHost == nil {
-                problems.append("“\(n.id)”: probe vllm-ssh without sshHost — health falls back to HTTP only")
+                problems.append("“\(n.id)”: SSH-serve probe without sshHost — health falls back to HTTP only")
             }
             seenIDs.insert(n.id)
 

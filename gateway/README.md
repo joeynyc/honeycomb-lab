@@ -19,15 +19,13 @@ Gateway runs automatically under launchd:
 
 | Model id | Routes to |
 |----------|-----------|
-| `cheap` | Cheapest healthy backend with a chat model loaded — `cheap_order` in config: lms → gx10 → joeydgx. Prefers the small model on the Mini over waking a Spark. |
+| `cheap` | First healthy backend in `cheap_order` (config) that has a chat model loaded. If `cheap_order` is omitted, backends are tried in declaration order. |
 | `any` | Like `cheap`, plus automatic failover: if the backend errors mid-request, retries the next healthy one (non-stream only). Any alias can opt in with `"failover": true` in the request body. |
-| `spark-peer` | gx10 vLLM (default) |
-| `spark-main` | JoeyDGX vLLM (when serving) |
-| `pc-4080` / `local-lms` | LM Studio on Mini (includes LM Link remote models) |
-| `gx10/<id>` | explicit peer model |
-| `lms/<id>` | explicit LM Studio model |
+| *your aliases* | Whatever you define in `config.json` |
+| `backend/<model>` | Explicit model on an explicit backend |
+| `model@backend` | Same passthrough, opposite order |
 
-Aliases with no pinned upstream model auto-pick the backend's first chat-capable model (embedding models are skipped).
+Aliases with no pinned upstream model auto-pick the backend's first chat-capable model (embedding models are skipped). Unknown model ids are sent to the first `cheap_order` backend (not a hardcoded lab name).
 
 ## Health
 
@@ -45,7 +43,7 @@ API key: any string (ignored)
 curl -s http://127.0.0.1:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "spark-peer",
+    "model": "cheap",
     "messages": [{"role":"user","content":"Say hi in one short sentence."}],
     "max_tokens": 64
   }' | jq

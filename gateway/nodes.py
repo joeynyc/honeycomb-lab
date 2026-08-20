@@ -356,8 +356,17 @@ def _probe_http_only(node: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_ssh_serve(probe: str | None) -> bool:
+    """SSH + discovered inference engine (vLLM, SGLang, llama.cpp).
+
+    `vllm-ssh` is the historical fleet.json value; `ssh-serve` is the alias.
+    """
+    return probe in ("vllm-ssh", "ssh-serve")
+
+
 _PROBES = {
     "vllm-ssh": _probe_vllm_ssh,
+    "ssh-serve": _probe_vllm_ssh,
     "lmstudio-hub": _probe_lmstudio_hub,
     "lmlink-peer": _probe_lmlink_peer,
     "http-only": _probe_http_only,
@@ -480,12 +489,12 @@ def snapshot(activity: dict[str, Any]) -> dict[str, Any]:
                 # SERVE needs configured container; STOP needs SSH + docker-served node.
                 "canControl": bool(
                     n.get("sshHost")
-                    and (n.get("container") or n.get("probe") == "vllm-ssh")
+                    and (n.get("container") or _is_ssh_serve(n.get("probe")))
                 ),
                 "canStart": bool(n.get("container") and n.get("sshHost")),
                 "canStop": bool(
                     n.get("sshHost")
-                    and (n.get("container") or n.get("probe") == "vllm-ssh")
+                    and (n.get("container") or _is_ssh_serve(n.get("probe")))
                 ),
                 **st,
             }

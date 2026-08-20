@@ -14,7 +14,7 @@
       "gatewayBackend": "spark1",
       "pingAlias": "spark-main",
       "container": "my-vllm-container",
-      "notes": "Online = SSH reachable. Models = whatever vLLM serves."
+      "notes": "Online = SSH reachable. Models = whatever the running serve (vLLM, SGLang, llama.cpp) exposes."
     },
     {
       "id": "hub",

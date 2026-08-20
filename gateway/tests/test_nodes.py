@@ -151,5 +151,14 @@ class LMLinkPeerProbe(unittest.TestCase):
         self.assertIn("2 on disk · none loaded", result["detail"])
 
 
+class SSHServeProbe(unittest.TestCase):
+    def test_historical_and_alias_names_share_the_probe(self):
+        self.assertIs(nodes._PROBES["ssh-serve"], nodes._PROBES["vllm-ssh"])
+        self.assertTrue(nodes._is_ssh_serve("vllm-ssh"))
+        self.assertTrue(nodes._is_ssh_serve("ssh-serve"))
+        self.assertFalse(nodes._is_ssh_serve("http-only"))
+        self.assertFalse(nodes._is_ssh_serve(None))
+
+
 if __name__ == "__main__":
     unittest.main()
