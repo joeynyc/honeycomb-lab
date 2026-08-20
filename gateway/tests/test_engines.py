@@ -197,5 +197,98 @@ class ModelsFromJSON(unittest.TestCase):
         )
 
 
+# Fixtures copied from Tests/HoneycombTests/ProbeParsersTests.swift so both
+# frontends stay pinned to identical lms CLI parsing.
+
+_LMS_PS = """
+       IDENTIFIER                     TYPE   DEVICE       SIZE      CONTEXT
+       qwen2.5-7b-instruct            LLM    local        4.68 GB   32768
+       llama-3.2-3b-instruct          LLM    gaming-pc    2.02 GB   8192
+       text-embedding-nomic           EMBEDDING local     0.55 GB   2048
+"""
+
+_LINK_STATUS = """
+    LM Link
+    Status: Online
+
+    Peers:
+    - gaming-pc
+      Status: connected
+      Models: 2
+    - old-laptop
+      Status: offline
+"""
+
+
+class LMStudioLoadedModels(unittest.TestCase):
+    def test_local_excludes_peer_rows(self):
+        self.assertEqual(
+            engines.lm_studio_loaded_models(
+                _LMS_PS, device_filter=None, exclude_devices=["gaming-pc"]
+            ),
+            ["qwen2.5-7b-instruct", "text-embedding-nomic"],
+        )
+
+    def test_device_filter_keeps_only_peer(self):
+        self.assertEqual(
+            engines.lm_studio_loaded_models(_LMS_PS, device_filter="gaming-pc"),
+            ["llama-3.2-3b-instruct"],
+        )
+
+    def test_none_loaded(self):
+        text = "No models are currently loaded.\nTo load a model, use lms load."
+        self.assertEqual(
+            engines.lm_studio_loaded_models(text, device_filter=None), []
+        )
+
+    def test_skips_header_and_hint_rows(self):
+        text = (
+            "IDENTIFIER   TYPE   SIZE\n"
+            "To load a model, run lms load\n"
+            "SIZE totals: 4.68 GB\n"
+        )
+        self.assertEqual(
+            engines.lm_studio_loaded_models(text, device_filter=None), []
+        )
+
+
+class LMLinkPeerConnected(unittest.TestCase):
+    def test_connected(self):
+        self.assertTrue(
+            engines.lm_link_peer_connected(_LINK_STATUS, "gaming-pc")
+        )
+
+    def test_offline(self):
+        self.assertFalse(
+            engines.lm_link_peer_connected(_LINK_STATUS, "old-laptop")
+        )
+
+    def test_missing_does_not_inherit_other_peer(self):
+        # "connected" appears for another peer; unknown names must not
+        # inherit it via the fallback unless the name also appears.
+        self.assertFalse(
+            engines.lm_link_peer_connected(_LINK_STATUS, "no-such-box")
+        )
+
+    def test_case_insensitive(self):
+        self.assertTrue(
+            engines.lm_link_peer_connected(_LINK_STATUS, "Gaming-PC")
+        )
+
+
+class LMStudioModelsOnDevice(unittest.TestCase):
+    def test_models_on_device(self):
+        text = """
+        LLM MODELS                      PARAMS   DEVICE      SIZE
+        llama-3.2-3b-instruct           3B       gaming-pc   2.02 GB
+        qwen2.5-7b-instruct             7B       local       4.68 GB
+        mistral-nemo-12b                12B      gaming-pc   7.10 GB
+        """
+        self.assertEqual(
+            engines.lm_studio_models_on_device(text, "gaming-pc"),
+            ["llama-3.2-3b-instruct", "mistral-nemo-12b"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
