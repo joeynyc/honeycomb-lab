@@ -26,7 +26,7 @@
       "gatewayBackend": "lms",
       "pingAlias": "local-lms",
       "hub": true,
-      "notes": "The machine Honeycomb runs on."
+      "notes": "The Mac running Honeycomb. LM Studio on this Mac is optional. For a PC running LM Studio, add an http-only node pointed at that machine's URL (see fleet.example.json) — do not use lmlink-peer unless you want LM Link."
     }
   ],
   "links": []

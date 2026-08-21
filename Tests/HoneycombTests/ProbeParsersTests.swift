@@ -184,6 +184,26 @@ final class ProbeParsersTests: XCTestCase {
         XCTAssertEqual(ProbeParsers.models(from: Data("not json".utf8)), [])
     }
 
+    func testModelsLMStudioV0FiltersToLoaded() {
+        let json = Data(#"""
+        {"data":[
+          {"id":"qwen2.5-7b-instruct","state":"loaded"},
+          {"id":"mistral-nemo-12b","state":"not-loaded"}
+        ]}
+        """#.utf8)
+        let listing = ProbeParsers.modelListing(from: json)
+        XCTAssertEqual(listing.ids, ["qwen2.5-7b-instruct"])
+        XCTAssertTrue(listing.loadedOnly)
+        XCTAssertEqual(ProbeParsers.models(from: json), ["qwen2.5-7b-instruct"])
+    }
+
+    func testModelsLMStudioV0NothingLoadedIsStillLoadedOnly() {
+        let json = Data(#"{"data":[{"id":"mistral-nemo-12b","state":"not-loaded"}]}"#.utf8)
+        let listing = ProbeParsers.modelListing(from: json)
+        XCTAssertEqual(listing.ids, [])
+        XCTAssertTrue(listing.loadedOnly)
+    }
+
     // MARK: - docker ps (running inference containers)
 
     private let dockerPsMixed = """

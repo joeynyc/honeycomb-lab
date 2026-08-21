@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -39,7 +39,7 @@ Two independent frontends over one fleet, coordinated by config files:
 
 Key Swift pieces:
 
-- `Services/HealthMonitor.swift` — the core polling engine. Holds observable fleet state and implements the four probe paths, one per node type: `vllm-ssh` (alias `ssh-serve`: SSH + nvidia-smi + discovered engine /metrics), `lmstudio-hub`, `lmlink-peer`, `http-only`. These are genuinely distinct code paths, not variants. The `lms` CLI is never invoked unless `http://127.0.0.1:1234` is already up (it would otherwise launch LM Studio.app). Remote LM Studio boxes use `http-only` and `/api/v0/models` (loaded vs disk) — no Mac LMS required.
+- `Services/HealthMonitor.swift` — the core polling engine. Holds observable fleet state and implements the four probe paths, one per node type: `vllm-ssh` (SSH + nvidia-smi + vLLM /metrics), `lmstudio-hub`, `lmlink-peer`, `http-only`. These are genuinely distinct code paths, not variants. The `lms` CLI is never invoked unless `http://127.0.0.1:1234` is already up (it would otherwise launch LM Studio.app). Remote LM Studio boxes use `http-only` and `/api/v0/models` (loaded vs disk) — no Mac LMS required.
 - `Services/ProbeParsers.swift` — pure parsers for probe output (`lms ps`/`lms link status`/`lms ls` text, `free`+`nvidia-smi` output, vLLM Prometheus gauges, models-listing JSON). These are the unit-tested surface (`Tests/HoneycombTests/`); keep new parsing logic here, not inline in HealthMonitor, so it stays testable against fixtures.
 - `Services/Subprocess.swift` — shared process runner; all SSH invocations route through it.
 - `Services/NodeControl.swift` / `DoctorService.swift` / `PingService.swift` — SERVE/STOP containers over SSH, spark-doctor runs, wire pings.

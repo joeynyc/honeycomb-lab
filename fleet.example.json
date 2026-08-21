@@ -26,7 +26,19 @@
       "gatewayBackend": "lms",
       "pingAlias": "local-lms",
       "hub": true,
-      "notes": "The machine Honeycomb runs on."
+      "notes": "The Mac running Honeycomb. LM Studio here is optional — the hex stays up as the control plane if :1234 is off. Honeycomb never launches the LM Studio GUI."
+    },
+    {
+      "id": "pc",
+      "name": "Gaming PC",
+      "role": "LM STUDIO",
+      "shortLabel": "PC",
+      "probe": "http-only",
+      "baseURL": "http://192.168.1.20:1234",
+      "hostname": "gaming-pc",
+      "address": "192.168.1.20",
+      "gatewayBackend": "pc-lms",
+      "notes": "Any remote LM Studio (or other OpenAI server). Point at the machine's LAN/tailnet URL and enable its local server. Loaded models come from HTTP — no Mac LM Studio, no LM Link required. Use lmlink-peer only if you actually want Link through the hub."
     }
   ],
   "links": []

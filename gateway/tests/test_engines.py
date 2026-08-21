@@ -196,6 +196,22 @@ class ModelsFromJSON(unittest.TestCase):
             engines.models_from_json(b'{"data":[{"id":"m1"}]}'), ["m1"]
         )
 
+    def test_lmstudio_v0_filters_to_loaded(self):
+        raw = """{"data":[
+            {"id":"qwen2.5-7b-instruct","state":"loaded"},
+            {"id":"mistral-nemo-12b","state":"not-loaded"}
+        ]}"""
+        ids, loaded_only = engines.models_listing_from_json(raw)
+        self.assertEqual(ids, ["qwen2.5-7b-instruct"])
+        self.assertTrue(loaded_only)
+        self.assertEqual(engines.models_from_json(raw), ["qwen2.5-7b-instruct"])
+
+    def test_lmstudio_v0_empty_loaded_is_still_loaded_only(self):
+        raw = '{"data":[{"id":"mistral-nemo-12b","state":"not-loaded"}]}'
+        ids, loaded_only = engines.models_listing_from_json(raw)
+        self.assertEqual(ids, [])
+        self.assertTrue(loaded_only)
+
 
 # Fixtures copied from Tests/HoneycombTests/ProbeParsersTests.swift so both
 # frontends stay pinned to identical lms CLI parsing.

@@ -397,7 +397,8 @@ final class HealthMonitor {
     }
 
     /// The hub — the machine the app runs on. Never list huge catalogs.
-    /// Online always (we're running here). Models = currently *loaded* in LM Studio (`lms ps`).
+    /// Online always (we're running here). Models = currently *loaded*
+    /// (`lms ps` only if :1234 is already up; the CLI must not launch LMS).
     private nonisolated static func probeHub(
         node: LabNode,
         session: URLSession,
@@ -690,25 +691,27 @@ final class HealthMonitor {
     }
 
     private nonisolated static func probeHTTPOnly(node: LabNode, session: URLSession) async -> ProbeResult {
-        let (ok, models, err, latency) = await checkInferenceDetailed(node: node, session: session)
+        let (ok, models, err, latency, loadedOnly) = await checkInferenceDetailed(node: node, session: session)
         if ok {
-            // Never treat a huge catalog as "loaded" — only report a tight list.
-            let serving = models.count > 20 ? Array(models.prefix(5)) : models
+            // Native LM Studio listings are already "what's loaded." A huge
+            // OpenAI catalog is not — drop it rather than pretend it's serving.
+            let dumpCatalog = !loadedOnly && models.count > 20
+            let serving = dumpCatalog ? [] : models
             let health: NodeHealth = .online
             let detail: String
             if models.isEmpty {
-                detail = "api up · nothing serving"
-            } else if models.count == 1 {
-                detail = "serving · \(shortModelName(models[0]))"
-            } else if models.count > 20 {
+                detail = loadedOnly ? "api up · nothing loaded" : "api up · nothing serving"
+            } else if dumpCatalog {
                 detail = "api up · catalog (\(models.count)) ignored — not loaded list"
+            } else if models.count == 1 {
+                detail = (loadedOnly ? "loaded · " : "serving · ") + shortModelName(models[0])
             } else {
-                detail = "serving · \(models.count) models"
+                detail = (loadedOnly ? "loaded · " : "serving · ") + "\(models.count) models"
             }
             return ProbeResult(
                 health: health,
                 latencyMs: latency,
-                models: models.count > 20 ? [] : serving,
+                models: serving,
                 error: nil,
                 sshOK: false,
                 dashboardOK: false,
@@ -742,7 +745,26 @@ final class HealthMonitor {
             ?? "/usr/bin/false"
     }()
 
+    /// `lms` auto-launches LM Studio.app when the local server is down.
+    /// Never invoke the CLI unless something is already answering on :1234.
+    private nonisolated static func localLMStudioAPIUp() async -> Bool {
+        let result = await SubprocessCache.shared.value(key: "lms-api-up", ttl: 15) {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:1234/v1/models")!)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 0.8
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else { return nil }
+                return http.statusCode < 500 ? Subprocess.Result(status: 0, output: "up") : nil
+            } catch {
+                return nil
+            }
+        }
+        return result != nil
+    }
+
     private nonisolated static func lmsOutput(_ args: [String], cacheKey: String) async -> String {
+        guard await localLMStudioAPIUp() else { return "" }
         let result = await SubprocessCache.shared.value(key: cacheKey, ttl: 15) {
             await Subprocess.run(lmsPath, args, timeout: 8, mergeStderr: true)
         }
@@ -790,15 +812,30 @@ final class HealthMonitor {
         node: LabNode,
         session: URLSession
     ) async -> (Bool, [String], String?) {
-        let (ok, models, err, _) = await checkInferenceDetailed(node: node, session: session)
+        let (ok, models, err, _, _) = await checkInferenceDetailed(node: node, session: session)
         return (ok, models, err)
+    }
+
+    /// LM Studio native listing — loaded vs disk, no `lms` CLI, works on
+    /// any host that exposes the local server (this Mac or a PC on the LAN).
+    private nonisolated static func lmStudioNativeModelsURL(for node: LabNode) -> URL? {
+        guard var comps = URLComponents(url: node.inferenceBaseURL, resolvingAgainstBaseURL: false)
+        else { return nil }
+        comps.path = "/api/v0/models"
+        comps.query = nil
+        comps.fragment = nil
+        return comps.url
     }
 
     private nonisolated static func checkInferenceDetailed(
         node: LabNode,
         session: URLSession
-    ) async -> (Bool, [String], String?, Double?) {
-        var candidates = [modelsURL(for: node)]
+    ) async -> (Bool, [String], String?, Double?, Bool) {
+        var candidates: [URL] = []
+        if node.probe != .vllmSSH, let native = lmStudioNativeModelsURL(for: node) {
+            candidates.append(native)
+        }
+        candidates.append(modelsURL(for: node))
         if node.probe == .lmlinkPeer {
             let base = node.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             if let tags = URL(string: base + "/api/tags") {
@@ -826,15 +863,18 @@ final class HealthMonitor {
                     lastError = "HTTP \(http.statusCode)"
                     continue
                 }
-                let models = ProbeParsers.models(from: data)
-                return (true, models, nil, latency)
+                let listing = ProbeParsers.modelListing(from: data)
+                if listing.loadedOnly {
+                    return (true, listing.ids, nil, latency, true)
+                }
+                return (true, listing.ids, nil, latency, false)
             } catch is CancellationError {
-                return (false, [], nil, nil)
+                return (false, [], nil, nil, false)
             } catch {
                 lastError = shortError(error)
             }
         }
-        return (false, [], lastError, nil)
+        return (false, [], lastError, nil, false)
     }
 
     private nonisolated static func shortModelName(_ id: String) -> String {

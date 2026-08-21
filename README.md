@@ -92,7 +92,8 @@ isn't running, the map offers a **START GATEWAY** button.
 
 Requirements: macOS 14+, `python3` (from Xcode Command Line Tools:
 `xcode-select --install`), and SSH keys to your GPU boxes. Optional per
-feature: vLLM on the boxes, LM Studio + LM Link, Docker (SERVE/STOP),
+feature: vLLM on the boxes, LM Studio on any machine you want to serve
+from (not required on the Mac), Docker (SERVE/STOP),
 [spark-doctor](https://github.com/joeynyc/spark-doctor) (DOCTOR).
 
 Then describe your machines — the app shows the exact path, and names any
@@ -153,10 +154,16 @@ var overrides the path). Start from `fleet.example.json`.
   SSH; the running serve (vLLM, SGLang, or llama.cpp) is discovered from
   docker, including its API port and `/metrics`. Existing `fleet.json`
   files keep using `vllm-ssh`.
-- `lmstudio-hub` — the hub itself, serving via LM Studio.
-- `lmlink-peer` — a remote GPU reached through the hub's LM Studio via
-  LM Link (`lmLinkPeer` = the peer's device name).
-- `http-only` — any OpenAI-compatible endpoint, health by HTTP only.
+- `lmstudio-hub` — the Mac running the app. Online as the control plane
+  even if LM Studio is not installed. If the local server is already up
+  on `:1234`, loaded models are listed; Honeycomb never launches the GUI.
+- `http-only` — any OpenAI-compatible endpoint, including a PC running
+  LM Studio. Point `baseURL` at that machine (`http://pc:1234`). Loaded
+  models come from LM Studio's HTTP API (`/api/v0/models`). This is the
+  path for every Honeycomb user who wants to see a remote box.
+- `lmlink-peer` — optional. A remote GPU reached through the hub's LM
+  Studio via LM Link (`lmLinkPeer` = the peer's device name). Only needed
+  if you actually use Link; requires Mac LM Studio already running.
 
 **Per-node fields:** `gatewayBackend` + `litAliases` map the node to a
 gateway backend so its hex lights on traffic; `pingAlias` enables PING;

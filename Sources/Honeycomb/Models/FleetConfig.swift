@@ -7,11 +7,11 @@ enum ProbeKind: String, Codable, Sendable {
     /// discovered from docker. Stored as `vllm-ssh` in fleet.json; `ssh-serve`
     /// is accepted as an alias.
     case vllmSSH = "vllm-ssh"
-    /// The machine the app runs on, serving via LM Studio
+    /// The machine the app runs on. LM Studio on this Mac is optional.
     case lmstudioHub = "lmstudio-hub"
-    /// Remote GPU reached through the hub's LM Studio via LM Link
+    /// Remote GPU reached through the hub's LM Studio via LM Link (optional)
     case lmlinkPeer = "lmlink-peer"
-    /// Plain OpenAI-compatible HTTP endpoint
+    /// OpenAI-compatible HTTP, including remote LM Studio on a PC
     case httpOnly = "http-only"
 
     static let documentedNames = ["vllm-ssh", "ssh-serve", "lmstudio-hub", "lmlink-peer", "http-only"]
