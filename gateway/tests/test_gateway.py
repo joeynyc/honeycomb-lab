@@ -323,6 +323,32 @@ class Routing(GatewayTestCase):
             ["spark1", "lms"],
         )
 
+    def test_default_and_auto_take_cheap_when_that_is_the_default(self):
+        """Backends-only config: default_model falls back to cheap."""
+        original = server.DEFAULT_MODEL
+        try:
+            server.DEFAULT_MODEL = "cheap"
+            cheap = server.resolve_model("cheap")
+            self.assertEqual(cheap[2], "cheap")
+            self.assertNotEqual(cheap[1], "cheap")
+            for sentinel in ("default", "auto"):
+                self.assertEqual(server.resolve_model(sentinel), cheap)
+        finally:
+            server.DEFAULT_MODEL = original
+
+    def test_http_default_uses_cheap_when_default_model_is_cheap(self):
+        original = server.DEFAULT_MODEL
+        try:
+            server.DEFAULT_MODEL = "cheap"
+            status, _, raw = _request(
+                "POST", "/v1/chat/completions", {"model": "default", "messages": []}
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(raw)["served_by"], "alpha")
+            self.assertEqual(ALPHA.received[-1]["payload"]["model"], "alpha-chat")
+        finally:
+            server.DEFAULT_MODEL = original
+
 
 class CheapAndFailover(GatewayTestCase):
     def test_cheap_resolves_to_first_healthy_backend(self):
