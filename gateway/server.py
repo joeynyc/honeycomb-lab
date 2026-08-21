@@ -368,16 +368,24 @@ def resolve_cheap() -> tuple[str, str, str | None] | None:
 
 def resolve_model(model: str | None) -> tuple[str, str, str | None]:
     """Return (backend_id, upstream_model_or_empty, alias_used)."""
+    # Normalize the gateway's own "use the default" sentinels first so a
+    # configured default of `cheap` still takes the cheap walk below.
+    if not model or model in ("default", "auto"):
+        model = DEFAULT_MODEL
+
     # Cost-aware routing: prefer the cheapest available model, fall back to
     # the normal default when nothing cheap is up.
     if model in ("cheap", "auto-cheap", "any"):
         if resolved := resolve_cheap():
             bid, up, _ = resolved
             return bid, up, "any" if model == "any" else "cheap"
-        model = DEFAULT_MODEL
-
-    if not model or model in ("default", "auto"):
-        model = DEFAULT_MODEL
+        if DEFAULT_MODEL not in ("cheap", "auto-cheap", "any"):
+            model = DEFAULT_MODEL
+        else:
+            # Default *is* cheap and nothing cheap is up — do not send the
+            # literal string "cheap" as an upstream model id.
+            fallback = next(iter(CHEAP_ORDER), None) or next(iter(BACKENDS))
+            return fallback, "", "any" if model == "any" else "cheap"
 
     # alias
     if model in ALIASES:
