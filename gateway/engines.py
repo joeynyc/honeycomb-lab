@@ -191,25 +191,42 @@ def lm_studio_models_on_device(text: str, device: str) -> list[str]:
     return found
 
 
-def models_from_json(raw: bytes | str) -> list[str]:
-    """Model ids from a models-listing response: OpenAI /v1/models
-    (data[].id), LM Studio (models[].id), or Ollama /api/tags
-    (models[].name / models[].model)."""
+def models_listing_from_json(raw: bytes | str) -> tuple[list[str], bool]:
+    """Model ids plus whether this is an LM Studio loaded-only listing.
+
+    Twin of ProbeParsers.modelListing. `/api/v0/models` items carry `state`
+    (`loaded` / `not-loaded`); when any item has `state`, only loaded ids
+    are returned and the second value is True so probes do not fall through
+    to a disk catalog.
+    """
     try:
         data = json.loads(raw if isinstance(raw, str) else raw.decode())
     except Exception:
-        return []
+        return [], False
     if not isinstance(data, dict):
-        return []
+        return [], False
     for key in ("data", "models"):
         items = data.get(key)
-        if isinstance(items, list):
-            ids = [
+        if not isinstance(items, list):
+            continue
+        dicts = [m for m in items if isinstance(m, dict)]
+        if any("state" in m for m in dicts):
+            loaded = [
                 m.get("id") or m.get("name") or m.get("model")
-                for m in items
-                if isinstance(m, dict)
+                for m in dicts
+                if str(m.get("state") or "").lower() == "loaded"
             ]
-            ids = [i for i in ids if i]
-            if ids:
-                return ids
-    return []
+            return [i for i in loaded if i], True
+        ids = [m.get("id") or m.get("name") or m.get("model") for m in dicts]
+        ids = [i for i in ids if i]
+        if ids:
+            return ids, False
+    return [], False
+
+
+def models_from_json(raw: bytes | str) -> list[str]:
+    """Model ids from a models-listing response: OpenAI /v1/models
+    (data[].id), LM Studio (models[].id or /api/v0/models with state),
+    or Ollama /api/tags (models[].name / models[].model)."""
+    ids, _ = models_listing_from_json(raw)
+    return ids

@@ -64,7 +64,7 @@ class HubProbe(unittest.TestCase):
             patch.object(
                 nodes,
                 "_http_models",
-                return_value=(True, ["catalog-model-must-not-appear"], 11.0),
+                return_value=(True, ["catalog-model-must-not-appear"], 11.0, False),
             ),
             patch.object(nodes, "_peer_names", return_value=["gaming-pc"]),
         ):
@@ -92,7 +92,7 @@ class LMLinkPeerProbe(unittest.TestCase):
         with (
             patch.object(nodes, "_lms_output", side_effect=_lms_output),
             patch.object(
-                nodes, "_http_models", return_value=(True, ["ignored-catalog"], 9.0)
+                nodes, "_http_models", return_value=(True, ["ignored-catalog"], 9.0, False)
             ),
         ):
             result = nodes._probe_lmlink_peer(node)
@@ -113,7 +113,7 @@ class LMLinkPeerProbe(unittest.TestCase):
         with (
             patch.object(nodes, "_lms_output", side_effect=_lms_output),
             patch.object(
-                nodes, "_http_models", return_value=(True, ["x"], 9.0)
+                nodes, "_http_models", return_value=(True, ["x"], 9.0, False)
             ),
         ):
             result = nodes._probe_lmlink_peer(node)
@@ -143,12 +143,60 @@ class LMLinkPeerProbe(unittest.TestCase):
         with (
             patch.object(nodes, "_lms_output", side_effect=lms),
             patch.object(
-                nodes, "_http_models", return_value=(True, [], 9.0)
+                nodes, "_http_models", return_value=(True, [], 9.0, False)
             ),
         ):
             result = nodes._probe_lmlink_peer(node)
         self.assertEqual(result["models"], [])
         self.assertIn("2 on disk · none loaded", result["detail"])
+
+
+class LMSCLIGate(unittest.TestCase):
+    def setUp(self):
+        with nodes._lms_cache_lock:
+            nodes._lms_cache.clear()
+
+    def test_lms_not_invoked_when_local_api_is_down(self):
+        with (
+            patch.object(nodes, "_lms_path", return_value="/usr/bin/lms"),
+            patch.object(nodes, "_local_lms_api_up", return_value=False),
+            patch.object(nodes, "_run") as run,
+        ):
+            self.assertEqual(nodes._lms_output(["ps"]), "")
+            run.assert_not_called()
+
+    def test_lms_runs_only_when_local_api_is_up(self):
+        with (
+            patch.object(nodes, "_lms_path", return_value="/usr/bin/lms"),
+            patch.object(nodes, "_local_lms_api_up", return_value=True),
+            patch.object(nodes, "_run", return_value=(0, "ok")) as run,
+        ):
+            self.assertEqual(nodes._lms_output(["ps"]), "ok")
+            run.assert_called_once()
+
+
+class HTTPOnlyProbe(unittest.TestCase):
+    def test_native_lms_listing_keeps_loaded_models(self):
+        node = {"id": "pc", "name": "PC", "baseURL": "http://192.168.1.20:1234"}
+        with patch.object(
+            nodes,
+            "_http_models",
+            return_value=(True, ["qwen2.5-7b-instruct"], 8.0, True),
+        ):
+            result = nodes._probe_http_only(node)
+        self.assertEqual(result["models"], ["qwen2.5-7b-instruct"])
+        self.assertIn("loaded", result["detail"])
+        self.assertEqual(result["health"], "online")
+
+    def test_huge_catalog_is_not_shown_as_serving(self):
+        node = {"id": "pc", "name": "PC", "baseURL": "http://192.168.1.20:1234"}
+        catalog = [f"m{i}" for i in range(25)]
+        with patch.object(
+            nodes, "_http_models", return_value=(True, catalog, 8.0, False)
+        ):
+            result = nodes._probe_http_only(node)
+        self.assertEqual(result["models"], [])
+        self.assertIn("catalog", result["detail"])
 
 
 class SSHServeProbe(unittest.TestCase):

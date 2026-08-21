@@ -97,7 +97,7 @@ struct NodeInspector: View {
             case .lmstudioHub:
                 row("INFER", node.inferenceOK
                     ? "LM Studio · \(Privacy.scrub(node.baseURL.absoluteString))"
-                    : "LM Studio server off (lms server start)")
+                    : "LM Studio server off — start it in LM Studio if you want local inference")
             case .lmlinkPeer:
                 row("INFER", node.inferenceOK
                     ? "API via hub LMS · \(Privacy.scrub(node.baseURL.absoluteString))"

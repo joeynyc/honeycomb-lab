@@ -174,12 +174,28 @@ enum ProbeParsers {
         return (kv, running, genTotal)
     }
 
+    /// Parsed models-listing JSON. `loadedOnly` is true when the payload
+    /// is LM Studio's native `/api/v0/models` (items have a `state` field)
+    /// so callers can show an empty list as "nothing loaded" instead of
+    /// falling through to a disk catalog.
+    struct ModelListing: Equatable, Sendable {
+        var ids: [String]
+        var loadedOnly: Bool
+    }
+
     /// Model ids from a models-listing response: OpenAI `/v1/models`
-    /// (`data[].id`), LM Studio (`models[].id`), or Ollama `/api/tags`
-    /// (`models[].name` / `models[].model`).
+    /// (`data[].id`), LM Studio (`models[].id` or `/api/v0/models` with
+    /// `state`), or Ollama `/api/tags` (`models[].name` / `models[].model`).
     static func models(from data: Data) -> [String] {
+        modelListing(from: data).ids
+    }
+
+    static func modelListing(from data: Data) -> ModelListing {
         struct ModelsResponse: Decodable {
-            struct Item: Decodable { let id: String? }
+            struct Item: Decodable {
+                let id: String?
+                let state: String?
+            }
             let data: [Item]?
             let models: [Item]?
         }
@@ -192,22 +208,33 @@ enum ProbeParsers {
         }
 
         if let decoded = try? JSONDecoder().decode(ModelsResponse.self, from: data) {
-            let ids = (decoded.data ?? decoded.models ?? []).compactMap(\.id)
-            if !ids.isEmpty { return ids }
+            let items = decoded.data ?? decoded.models ?? []
+            let hasState = items.contains { $0.state != nil }
+            if hasState {
+                let loaded = items.compactMap { item -> String? in
+                    guard item.state?.caseInsensitiveCompare("loaded") == .orderedSame else {
+                        return nil
+                    }
+                    return item.id
+                }
+                return ModelListing(ids: loaded, loadedOnly: true)
+            }
+            let ids = items.compactMap(\.id)
+            if !ids.isEmpty { return ModelListing(ids: ids, loadedOnly: false) }
         }
         if let ollama = try? JSONDecoder().decode(OllamaResponse.self, from: data) {
             let names = (ollama.models ?? []).compactMap { $0.name ?? $0.model }
-            if !names.isEmpty { return names }
+            if !names.isEmpty { return ModelListing(ids: names, loadedOnly: false) }
         }
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let arr = obj["data"] as? [[String: Any]] {
-                return arr.compactMap { $0["id"] as? String }
+                return ModelListing(ids: arr.compactMap { $0["id"] as? String }, loadedOnly: false)
             }
             if obj["object"] as? String == "list" {
-                return []
+                return ModelListing(ids: [], loadedOnly: false)
             }
         }
-        return []
+        return ModelListing(ids: [], loadedOnly: false)
     }
 
     /// Running inference container names from `docker ps --format '{{.Names}}\t{{.Image}}'`.
