@@ -11,3 +11,7 @@ updates:
     labels:
       - dependencies
       - security
+    groups:
+      github-actions:
+        patterns:
+          - "*"
