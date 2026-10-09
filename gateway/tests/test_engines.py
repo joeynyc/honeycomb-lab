@@ -305,6 +305,17 @@ class LMLinkPeerConnected(unittest.TestCase):
         text = "Peers:\n- gaming-pc\n  Status: connected\n- pc\n  Status: offline\n"
         self.assertFalse(engines.lm_link_peer_connected(text, "pc"))
 
+    def test_name_without_block_does_not_inherit_status(self):
+        text = "Peers:\n- gaming-pc\n  Status: connected\n"
+        self.assertFalse(engines.lm_link_peer_connected(text, "pc"))
+
+    def test_fallback_for_unrecognized_layout(self):
+        f = engines.lm_link_peer_connected
+        self.assertTrue(f("gaming-pc: connected", "gaming-pc"))
+        self.assertFalse(f("gaming-pc: not connected", "gaming-pc"))
+        self.assertFalse(f("gaming-pc (0 connected)", "gaming-pc"))
+        self.assertFalse(f("gaming-pc: connected", "pc"))
+
     def test_peer_label_with_suffix(self):
         text = "Peers:\n- gaming-pc (Windows)\n  Status: connected\n"
         self.assertTrue(engines.lm_link_peer_connected(text, "gaming-pc"))

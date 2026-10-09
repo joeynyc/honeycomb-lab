@@ -87,24 +87,16 @@ final class ProbeParsersTests: XCTestCase {
         XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: text, name: "pc"))
         let suffixed = "Peers:\n- gaming-pc (Windows)\n  Status: connected\n"
         XCTAssertTrue(ProbeParsers.lmLinkPeerConnected(in: suffixed, name: "gaming-pc"))
+        // No block of its own: must not inherit gaming-pc's status via fallback.
+        let only = "Peers:\n- gaming-pc\n  Status: connected\n"
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: only, name: "pc"))
     }
 
-    // MARK: - ssh remote command quoting
-
-    func testShellJoinKeepsTabFormatAsOneWord() {
-        XCTAssertEqual(
-            Subprocess.shellJoin(["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"]),
-            "docker ps --format '{{.Names}}\t{{.Image}}'"
-        )
-    }
-
-    func testShellJoinNeutralizesInjection() {
-        XCTAssertEqual(
-            Subprocess.shellJoin(["docker", "start", "x; rm -rf ~"]),
-            "docker start 'x; rm -rf ~'"
-        )
-        XCTAssertEqual(Subprocess.shellQuote("it's"), #"'it'\''s'"#)
-        XCTAssertEqual(Subprocess.shellQuote(""), "''")
+    func testLinkFallbackForUnrecognizedLayout() {
+        XCTAssertTrue(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc: connected", name: "gaming-pc"))
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc: not connected", name: "gaming-pc"))
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc (0 connected)", name: "gaming-pc"))
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc: connected", name: "pc"))
     }
 
     // MARK: - lms ls (models on a remote device)

@@ -107,9 +107,11 @@ enum ProbeParsers {
         let needle = name.lowercased()
         let lines = text.components(separatedBy: .newlines)
         var inPeer = false
+        var sawPeerBlock = false
         for line in lines {
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("- ") {
+                sawPeerBlock = true
                 let label = t.dropFirst(2).trimmingCharacters(in: .whitespaces).lowercased()
                 inPeer = isPeerLabel(label, name: needle)
             } else if inPeer && t.lowercased().hasPrefix("status:") {
@@ -118,9 +120,16 @@ enum ProbeParsers {
                 return value.hasPrefix("connected") || value.hasPrefix("online")
             }
         }
-        // fallback: name + the word "connected" anywhere
-        return text.localizedCaseInsensitiveContains(name)
-            && text.range(of: #"\bconnected\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+        // Peer blocks exist but none is this peer: it's not connected.
+        if sawPeerBlock { return false }
+        // Unrecognized layout: name and "connected" as whole words, not negated.
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        func has(_ pattern: String) -> Bool {
+            text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        }
+        return has(#"(?<![\w.-])"# + escaped + #"(?![\w.-])"#)
+            && has(#"\bconnected\b"#)
+            && !has(#"\b(not|0|no)\s+connected\b"#)
     }
 
     /// "- <label>" names the peer: exact, or name then a non-name character

@@ -47,13 +47,7 @@ final class NodeControl {
 
         let result = await Subprocess.run(
             "/usr/bin/ssh",
-            [
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=5",
-                "--",
-                host,
-                Subprocess.shellJoin(["docker", "start", container]),
-            ],
+            Self.sshArgs(host, ["docker", "start", container]),
             timeout: 30,
             mergeStderr: true
         )
@@ -77,6 +71,12 @@ final class NodeControl {
         }
     }
 
+    /// ssh argv running `remote` on host. ssh hands trailing arguments to
+    /// the remote shell as one string, so the words are always quoted here.
+    private static func sshArgs(_ host: String, _ remote: [String]) -> [String] {
+        ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "--", host, Subprocess.shellJoin(remote)]
+    }
+
     func stop(_ node: LabNode) async {
         guard busyNodeID == nil, let host = node.sshHost else { return }
         busyNodeID = node.id
@@ -86,13 +86,7 @@ final class NodeControl {
         // List running containers; host-network vLLM has empty Ports, so image match.
         let list = await Subprocess.run(
             "/usr/bin/ssh",
-            [
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=5",
-                "--",
-                host,
-                Subprocess.shellJoin(["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"]),
-            ],
+            Self.sshArgs(host, ["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"]),
             timeout: 15,
             mergeStderr: true
         )
@@ -128,13 +122,7 @@ final class NodeControl {
             return
         }
 
-        let args = [
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=5",
-            "--",
-            host,
-            Subprocess.shellJoin(["docker", "stop"] + targets),
-        ]
+        let args = Self.sshArgs(host, ["docker", "stop"] + targets)
 
         let result = await Subprocess.run(
             "/usr/bin/ssh",
