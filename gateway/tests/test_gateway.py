@@ -733,6 +733,40 @@ class ControlSecurity(GatewayTestCase):
         )
         self.assertNotIn("Access-Control-Allow-Origin", headers)
 
+    def test_cross_origin_browser_post_denied_from_localhost(self):
+        # A page on the hub's browser can POST text/plain with no preflight;
+        # the Origin it must send is what stops it.
+        status, _, _ = _request(
+            "POST", "/control/ping", {"node": "nope"},
+            headers={"Origin": "https://evil.example.com", "Content-Type": "text/plain"},
+        )
+        self.assertEqual(status, 401)
+        status, _, _ = _request(
+            "POST", "/control/ping", {"node": "nope"},
+            headers={"Origin": "null"},
+        )
+        self.assertEqual(status, 401)
+
+    def test_cross_site_fetch_metadata_denied(self):
+        status, _, _ = _request(
+            "POST", "/control/ping", {"node": "nope"},
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(status, 401)
+
+    def test_same_origin_dashboard_post_allowed(self):
+        status, _, _ = _request(
+            "POST", "/control/ping", {"node": "nope"},
+            headers={"Origin": BASE, "Sec-Fetch-Site": "same-origin"},
+        )
+        self.assertEqual(status, 200)
+
+    def test_control_preflight_grants_no_cors(self):
+        _, headers, _ = _request("OPTIONS", "/control/container")
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+        _, headers, _ = _request("OPTIONS", "/v1/chat/completions")
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
+
     def test_api_responses_do_carry_cors(self):
         _, headers, _ = _request("GET", "/v1/models")
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")

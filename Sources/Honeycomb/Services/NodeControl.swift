@@ -52,7 +52,7 @@ final class NodeControl {
                 "-o", "ConnectTimeout=5",
                 "--",
                 host,
-                "docker", "start", container,
+                Subprocess.shellJoin(["docker", "start", container]),
             ],
             timeout: 30,
             mergeStderr: true
@@ -91,7 +91,7 @@ final class NodeControl {
                 "-o", "ConnectTimeout=5",
                 "--",
                 host,
-                "docker", "ps", "--format", "{{.Names}}\t{{.Image}}",
+                Subprocess.shellJoin(["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"]),
             ],
             timeout: 15,
             mergeStderr: true
@@ -128,14 +128,13 @@ final class NodeControl {
             return
         }
 
-        var args = [
+        let args = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
             "--",
             host,
-            "docker", "stop",
+            Subprocess.shellJoin(["docker", "stop"] + targets),
         ]
-        args.append(contentsOf: targets)
 
         let result = await Subprocess.run(
             "/usr/bin/ssh",

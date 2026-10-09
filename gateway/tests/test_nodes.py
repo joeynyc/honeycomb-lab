@@ -5,6 +5,7 @@ These checks make sure the probes actually call those parsers the way
 HealthMonitor does — models from `lms ps`, not the HTTP catalog.
 """
 
+import shlex
 import sys
 import unittest
 from pathlib import Path
@@ -206,6 +207,47 @@ class SSHServeProbe(unittest.TestCase):
         self.assertTrue(nodes._is_ssh_serve("ssh-serve"))
         self.assertFalse(nodes._is_ssh_serve("http-only"))
         self.assertFalse(nodes._is_ssh_serve(None))
+
+
+class ContainerControl(unittest.TestCase):
+    """ssh hands its trailing argv to the remote shell as one string, so the
+    remote command must survive shell re-parsing word for word."""
+
+    def _run_action(self, verb, container, ps_out=""):
+        calls = []
+
+        def fake_run(cmd, timeout, merge_stderr=False):
+            calls.append(cmd)
+            return 0, ps_out
+
+        node = {"id": "spark1", "sshHost": "spark1", "container": container}
+        with patch.object(nodes, "_find_node", return_value=node), \
+                patch.object(nodes, "_run", side_effect=fake_run):
+            result = nodes.action_container("spark1", verb)
+        return result, calls
+
+    def _remote_words(self, cmd):
+        self.assertEqual(cmd[:1], ["ssh"])
+        dash = cmd.index("--")
+        self.assertEqual(len(cmd), dash + 3, "remote command must be one argument")
+        return shlex.split(cmd[-1])
+
+    def test_stop_format_string_survives_remote_shell(self):
+        result, calls = self._run_action(
+            "stop", "vllm", ps_out="vllm\tvllm/vllm-openai:latest\n"
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            self._remote_words(calls[0]),
+            ["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"],
+        )
+        self.assertEqual(self._remote_words(calls[1]), ["docker", "stop", "vllm"])
+
+    def test_start_container_name_cannot_inject(self):
+        _, calls = self._run_action("start", "x; rm -rf ~")
+        self.assertEqual(
+            self._remote_words(calls[0]), ["docker", "start", "x; rm -rf ~"]
+        )
 
 
 if __name__ == "__main__":

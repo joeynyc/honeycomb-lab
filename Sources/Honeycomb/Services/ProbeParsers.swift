@@ -100,22 +100,35 @@ enum ProbeParsers {
     }
 
     /// Whether `lms link status` output shows the named peer as connected.
-    /// Looks for a peer block: "- <name>" then "Status: connected".
+    /// Looks for a peer block: "- <name>" then "Status: connected". The
+    /// status value must *start* with connected/online so "disconnected"
+    /// doesn't count.
     static func lmLinkPeerConnected(in text: String, name: String) -> Bool {
+        let needle = name.lowercased()
         let lines = text.components(separatedBy: .newlines)
         var inPeer = false
         for line in lines {
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("- ") {
-                inPeer = t.dropFirst(2).lowercased().contains(name.lowercased())
+                let label = t.dropFirst(2).trimmingCharacters(in: .whitespaces).lowercased()
+                inPeer = isPeerLabel(label, name: needle)
             } else if inPeer && t.lowercased().hasPrefix("status:") {
-                return t.lowercased().contains("connected")
-                    || t.lowercased().contains("online")
+                let value = t.dropFirst("status:".count)
+                    .trimmingCharacters(in: .whitespaces).lowercased()
+                return value.hasPrefix("connected") || value.hasPrefix("online")
             }
         }
-        // fallback: name + connected anywhere
+        // fallback: name + the word "connected" anywhere
         return text.localizedCaseInsensitiveContains(name)
-            && text.localizedCaseInsensitiveContains("connected")
+            && text.range(of: #"\bconnected\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// "- <label>" names the peer: exact, or name then a non-name character
+    /// ("gaming-pc (Windows)"), so peer "pc" doesn't claim "gaming-pc".
+    private static func isPeerLabel(_ label: String, name: String) -> Bool {
+        guard label.hasPrefix(name) else { return false }
+        guard let next = label.dropFirst(name.count).first else { return true }
+        return !(next.isLetter || next.isNumber || "-_.".contains(next))
     }
 
     /// Models listed under a remote device in `lms ls` (DEVICE column).

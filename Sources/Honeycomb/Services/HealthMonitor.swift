@@ -276,7 +276,7 @@ final class HealthMonitor {
     /// Open Ghostty: SSH to remote nodes, local shell on the hub (Mac mini).
     func openSSH(_ node: LabNode) {
         if let host = node.sshHost, !host.isEmpty {
-            openGhostty(arguments: ["-e", "ssh", host])
+            openGhostty(arguments: ["-e", "ssh", "--", host])
             return
         }
         if node.isHub {

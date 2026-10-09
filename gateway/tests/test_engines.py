@@ -291,6 +291,24 @@ class LMLinkPeerConnected(unittest.TestCase):
             engines.lm_link_peer_connected(_LINK_STATUS, "Gaming-PC")
         )
 
+    def test_disconnected_is_not_connected(self):
+        text = "Peers:\n- gaming-pc\n  Status: disconnected\n"
+        self.assertFalse(engines.lm_link_peer_connected(text, "gaming-pc"))
+
+    def test_fallback_ignores_disconnected(self):
+        self.assertFalse(
+            engines.lm_link_peer_connected("gaming-pc disconnected", "gaming-pc")
+        )
+
+    def test_peer_name_is_not_a_substring_match(self):
+        # Peer "pc" must not claim the "gaming-pc" block's status.
+        text = "Peers:\n- gaming-pc\n  Status: connected\n- pc\n  Status: offline\n"
+        self.assertFalse(engines.lm_link_peer_connected(text, "pc"))
+
+    def test_peer_label_with_suffix(self):
+        text = "Peers:\n- gaming-pc (Windows)\n  Status: connected\n"
+        self.assertTrue(engines.lm_link_peer_connected(text, "gaming-pc"))
+
 
 class LMStudioModelsOnDevice(unittest.TestCase):
     def test_models_on_device(self):

@@ -76,6 +76,37 @@ final class ProbeParsersTests: XCTestCase {
         XCTAssertTrue(ProbeParsers.lmLinkPeerConnected(in: linkStatus, name: "Gaming-PC"))
     }
 
+    func testLinkPeerDisconnected() {
+        let text = "Peers:\n- gaming-pc\n  Status: disconnected\n"
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: text, name: "gaming-pc"))
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc disconnected", name: "gaming-pc"))
+    }
+
+    func testLinkPeerNameIsNotSubstringMatch() {
+        let text = "Peers:\n- gaming-pc\n  Status: connected\n- pc\n  Status: offline\n"
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: text, name: "pc"))
+        let suffixed = "Peers:\n- gaming-pc (Windows)\n  Status: connected\n"
+        XCTAssertTrue(ProbeParsers.lmLinkPeerConnected(in: suffixed, name: "gaming-pc"))
+    }
+
+    // MARK: - ssh remote command quoting
+
+    func testShellJoinKeepsTabFormatAsOneWord() {
+        XCTAssertEqual(
+            Subprocess.shellJoin(["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"]),
+            "docker ps --format '{{.Names}}\t{{.Image}}'"
+        )
+    }
+
+    func testShellJoinNeutralizesInjection() {
+        XCTAssertEqual(
+            Subprocess.shellJoin(["docker", "start", "x; rm -rf ~"]),
+            "docker start 'x; rm -rf ~'"
+        )
+        XCTAssertEqual(Subprocess.shellQuote("it's"), #"'it'\''s'"#)
+        XCTAssertEqual(Subprocess.shellQuote(""), "''")
+    }
+
     // MARK: - lms ls (models on a remote device)
 
     func testModelsOnDevice() {
