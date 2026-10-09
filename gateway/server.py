@@ -620,10 +620,13 @@ class Handler(BaseHTTPRequestHandler):
         return payload
 
     def do_OPTIONS(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
+        # Control endpoints never grant cross-origin preflights.
+        if not path.startswith("/control/"):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "*")
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
@@ -734,12 +737,30 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return hmac.compare_digest(supplied, token)
 
+    def _same_origin(self) -> bool:
+        """False for a browser request sent from another site.
+
+        A page can POST text/plain to http://127.0.0.1:4000/control/... with
+        no preflight; CORS only hides the reply, the action still runs. So a
+        browser-sent Origin must match Host (the dashboard is same-origin).
+        Non-browser clients (the app, curl) send neither header.
+        """
+        site = (self.headers.get("Sec-Fetch-Site") or "").lower()
+        if site and site not in ("same-origin", "none"):
+            return False
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        netloc = urlparse(origin).netloc.lower()
+        return bool(netloc) and netloc == (self.headers.get("Host") or "").lower()
+
     def _control_authorized(self) -> bool:
         """Control actions run remote commands. Localhost is exempt from the
         token (the Mac app, local curl) — but only when the request also
         carries a literal Host, so a rebound browser request can't inherit
-        the exemption."""
-        if not self._host_is_literal():
+        the exemption, and comes from the same origin, so a page the hub's
+        browser visits can't forge it."""
+        if not self._host_is_literal() or not self._same_origin():
             return False
         if self.client_address[0] in ("127.0.0.1", "::1"):
             return True

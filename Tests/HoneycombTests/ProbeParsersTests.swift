@@ -76,6 +76,29 @@ final class ProbeParsersTests: XCTestCase {
         XCTAssertTrue(ProbeParsers.lmLinkPeerConnected(in: linkStatus, name: "Gaming-PC"))
     }
 
+    func testLinkPeerDisconnected() {
+        let text = "Peers:\n- gaming-pc\n  Status: disconnected\n"
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: text, name: "gaming-pc"))
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc disconnected", name: "gaming-pc"))
+    }
+
+    func testLinkPeerNameIsNotSubstringMatch() {
+        let text = "Peers:\n- gaming-pc\n  Status: connected\n- pc\n  Status: offline\n"
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: text, name: "pc"))
+        let suffixed = "Peers:\n- gaming-pc (Windows)\n  Status: connected\n"
+        XCTAssertTrue(ProbeParsers.lmLinkPeerConnected(in: suffixed, name: "gaming-pc"))
+        // No block of its own: must not inherit gaming-pc's status via fallback.
+        let only = "Peers:\n- gaming-pc\n  Status: connected\n"
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: only, name: "pc"))
+    }
+
+    func testLinkFallbackForUnrecognizedLayout() {
+        XCTAssertTrue(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc: connected", name: "gaming-pc"))
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc: not connected", name: "gaming-pc"))
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc (0 connected)", name: "gaming-pc"))
+        XCTAssertFalse(ProbeParsers.lmLinkPeerConnected(in: "gaming-pc: connected", name: "pc"))
+    }
+
     // MARK: - lms ls (models on a remote device)
 
     func testModelsOnDevice() {
