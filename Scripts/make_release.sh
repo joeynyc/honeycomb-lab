@@ -38,10 +38,15 @@ APP="$ROOT/${APP_NAME}.app"
 echo "==> Verifying"
 lipo -archs "$APP/Contents/MacOS/$APP_NAME"
 codesign --verify --deep --strict "$APP" && echo "signature ok"
-if [[ "$SIGNING_MODE" != "adhoc" ]] \
-  && codesign -dv "$APP" 2>&1 | grep -q '^Signature=adhoc'; then
-  echo "APP_IDENTITY was set but the app is ad-hoc signed" >&2
-  exit 1
+if [[ "$SIGNING_MODE" != "adhoc" ]]; then
+  # Capture first: under pipefail, grep -q closing the pipe early can
+  # SIGPIPE codesign and silently skip this check.
+  SIG_INFO=$(codesign -dv "$APP" 2>&1 || true)
+  if grep -q '^Signature=adhoc' <<<"$SIG_INFO"; then
+    echo "SIGNING_MODE=$SIGNING_MODE but the app is ad-hoc signed" \
+      "(is APP_IDENTITY set to a valid identity?)" >&2
+    exit 1
+  fi
 fi
 [[ -f "$APP/Contents/Resources/gateway/server.py" ]] \
   && echo "gateway bundled ok" \

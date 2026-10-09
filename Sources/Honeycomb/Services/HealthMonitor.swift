@@ -300,7 +300,7 @@ final class HealthMonitor {
         // Fallback: Terminal.app
         let cmd: String
         if arguments.count >= 2, arguments[0] == "-e" {
-            cmd = arguments.dropFirst().map { Self.shellEscape($0) }.joined(separator: " ")
+            cmd = Subprocess.shellJoin(Array(arguments.dropFirst()))
         } else {
             cmd = ""
         }
@@ -319,13 +319,6 @@ final class HealthMonitor {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", script]
         try? process.run()
-    }
-
-    private nonisolated static func shellEscape(_ s: String) -> String {
-        if s.rangeOfCharacter(from: CharacterSet.alphanumerics.inverted) == nil {
-            return s
-        }
-        return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     // MARK: - Probe
@@ -556,7 +549,7 @@ final class HealthMonitor {
             + "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits; "
             + "echo \(marker); "
             + "docker ps --format '{{.Names}} {{.Image}}'"
-            + " | awk -v pref=\(shellEscape(preferredContainer ?? "")) 'tolower($0) ~ /\(engineTokens)/ || (pref != \"\" && $1 == pref) {print $1}'"
+            + " | awk -v pref=\(Subprocess.shellQuote(preferredContainer ?? "")) 'tolower($0) ~ /\(engineTokens)/ || (pref != \"\" && $1 == pref) {print $1}'"
             + " | head -n 3"
             + " | xargs -r docker inspect --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' 2>/dev/null"
             + " || true"
