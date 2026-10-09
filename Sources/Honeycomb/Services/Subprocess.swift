@@ -9,6 +9,23 @@ enum Subprocess {
         var output: String
     }
 
+    /// One remote command string for ssh, each word shell-quoted (twin of
+    /// Python's shlex.join). ssh joins trailing arguments with spaces and the
+    /// remote shell re-parses them, so unquoted words split on tabs/spaces
+    /// and `;` or `$()` in a fleet.json value would run on the node.
+    static func shellJoin(_ words: [String]) -> String {
+        words.map(shellQuote).joined(separator: " ")
+    }
+
+    static func shellQuote(_ word: String) -> String {
+        let safe = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./-_")
+        if !word.isEmpty, word.unicodeScalars.allSatisfy(safe.contains) {
+            return word
+        }
+        return "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// mergeStderr: some CLIs (lms link status) write human output to stderr
     /// when not attached to a TTY — merge both streams into one pipe so
     /// parsing sees it either way.
