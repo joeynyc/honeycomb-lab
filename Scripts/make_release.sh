@@ -20,8 +20,16 @@ DIST="$ROOT/dist"
 rm -rf "$DIST"
 mkdir -p "$DIST"
 
-echo "==> Building universal release (arm64 + x86_64)"
-ARCHES="arm64 x86_64" SIGNING_MODE="${SIGNING_MODE:-adhoc}" \
+# Ad-hoc only when no identity is given — package_app.sh treats
+# SIGNING_MODE=adhoc as "ignore APP_IDENTITY".
+if [[ -n "${APP_IDENTITY:-}" ]]; then
+  SIGNING_MODE="${SIGNING_MODE:-identity}"
+else
+  SIGNING_MODE="${SIGNING_MODE:-adhoc}"
+fi
+
+echo "==> Building universal release (arm64 + x86_64, signing: $SIGNING_MODE)"
+ARCHES="arm64 x86_64" SIGNING_MODE="$SIGNING_MODE" \
   "$ROOT/Scripts/package_app.sh" release
 
 APP="$ROOT/${APP_NAME}.app"
@@ -30,6 +38,16 @@ APP="$ROOT/${APP_NAME}.app"
 echo "==> Verifying"
 lipo -archs "$APP/Contents/MacOS/$APP_NAME"
 codesign --verify --deep --strict "$APP" && echo "signature ok"
+if [[ "$SIGNING_MODE" != "adhoc" ]]; then
+  # Capture first: under pipefail, grep -q closing the pipe early can
+  # SIGPIPE codesign and silently skip this check.
+  SIG_INFO=$(codesign -dv "$APP" 2>&1 || true)
+  if grep -q '^Signature=adhoc' <<<"$SIG_INFO"; then
+    echo "SIGNING_MODE=$SIGNING_MODE but the app is ad-hoc signed" \
+      "(is APP_IDENTITY set to a valid identity?)" >&2
+    exit 1
+  fi
+fi
 [[ -f "$APP/Contents/Resources/gateway/server.py" ]] \
   && echo "gateway bundled ok" \
   || { echo "gateway missing from bundle" >&2; exit 1; }

@@ -155,24 +155,45 @@ def lm_studio_loaded_models(
     return found
 
 
+def _is_peer_label(label: str, name: str) -> bool:
+    """`- <label>` names the peer: exact, or name then a non-name character
+    (`gaming-pc (Windows)`), so peer "pc" doesn't claim "gaming-pc"."""
+    if not label.startswith(name):
+        return False
+    rest = label[len(name):]
+    return not rest or not (rest[0].isalnum() or rest[0] in "-_.")
+
+
 def lm_link_peer_connected(text: str, name: str) -> bool:
     """Whether `lms link status` shows the named peer as connected.
 
     Twin of ProbeParsers.lmLinkPeerConnected: walk peer blocks (`- <name>`
-    then `Status: connected` / `online`). Fallback is name + "connected"
-    anywhere, so an unknown name does not inherit another peer's status.
+    then `Status: connected` / `online`). The status value must *start* with
+    connected/online so "disconnected" doesn't count. A name with no block
+    of its own is not connected; only output with no peer blocks at all
+    falls back to whole-word name + un-negated "connected".
     """
     in_peer = False
+    saw_peer_block = False
     needle = name.lower()
     for line in text.splitlines():
         t = line.strip()
         if t.startswith("- "):
-            in_peer = needle in t[2:].lower()
+            saw_peer_block = True
+            in_peer = _is_peer_label(t[2:].strip().lower(), needle)
         elif in_peer and t.lower().startswith("status:"):
-            low = t.lower()
-            return "connected" in low or "online" in low
+            value = t[len("status:"):].strip().lower()
+            return value.startswith(("connected", "online"))
+    # Peer blocks exist but none is this peer: it's not connected.
+    if saw_peer_block:
+        return False
+    # Unrecognized layout: name and "connected" as whole words, not negated.
     low = text.lower()
-    return needle in low and "connected" in low
+    return (
+        re.search(rf"(?<![\w.-]){re.escape(needle)}(?![\w.-])", low) is not None
+        and re.search(r"\bconnected\b", low) is not None
+        and re.search(r"\b(not|0|no)\s+connected\b", low) is None
+    )
 
 
 def lm_studio_models_on_device(text: str, device: str) -> list[str]:

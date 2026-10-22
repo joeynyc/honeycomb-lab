@@ -646,6 +646,17 @@ def action_doctor(node_id: str) -> dict[str, Any]:
     return {"ok": report["error"] is None, **report}
 
 
+def _ssh_argv(host: str, *remote: str) -> list[str]:
+    """ssh argv running `remote` on host, one word per element.
+
+    ssh joins its trailing arguments with spaces and the remote login shell
+    re-parses them, so each word must be shell-quoted here — otherwise a tab
+    in a docker format string, or a space or `;` in a container name, splits
+    or injects.
+    """
+    return ["ssh", *SSH_OPTS, "--", host, shlex.join(remote)]
+
+
 def action_container(node_id: str, verb: str) -> dict[str, Any]:
     """docker start/stop over SSH.
 
@@ -664,9 +675,8 @@ def action_container(node_id: str, verb: str) -> dict[str, Any]:
     if verb == "start":
         if not preferred:
             return {"ok": False, "error": "node has no container (SERVE target)"}
-        # Do not shell-quote: argv is passed as a single docker argument (no shell).
         code, out = _run(
-            ["ssh", *SSH_OPTS, "--", host, "docker", "start", preferred],
+            _ssh_argv(host, "docker", "start", preferred),
             timeout=40,
         )
         if code == 0:
@@ -678,16 +688,7 @@ def action_container(node_id: str, verb: str) -> dict[str, Any]:
 
     # stop — discover live inference containers first
     code, out = _run(
-        [
-            "ssh",
-            *SSH_OPTS,
-            "--",
-            host,
-            "docker",
-            "ps",
-            "--format",
-            "{{.Names}}\t{{.Image}}",
-        ],
+        _ssh_argv(host, "docker", "ps", "--format", "{{.Names}}\t{{.Image}}"),
         timeout=20,
     )
     if code != 0:
@@ -700,7 +701,7 @@ def action_container(node_id: str, verb: str) -> dict[str, Any]:
         return {"ok": True, "message": "no inference container running"}
 
     code, out = _run(
-        ["ssh", *SSH_OPTS, "--", host, "docker", "stop", *targets],
+        _ssh_argv(host, "docker", "stop", *targets),
         timeout=60,
     )
     if code == 0:
