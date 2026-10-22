@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Honeycomb — Mac chrome mockup</title>
+  <style>
+    :root {
+      --page: #c8c8cc;
+      --shadow: 0 22px 60px rgba(0, 0, 0, 0.28);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      background: var(--page);
+      color: #1d1d1f;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 28px 20px 40px;
+    }
+
+    .page-head {
+      width: min(1080px, 100%);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 16px;
+    }
+    .page-head h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .page-head p {
+      margin: 4px 0 0;
+      font-size: 12px;
+      color: #6e6e73;
+    }
+    .skin-switch {
+      display: flex;
+      background: #e8e8ed;
+      border-radius: 8px;
+      padding: 2px;
+    }
+    .skin-switch button {
+      border: 0;
+      background: transparent;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 12px;
+      border-radius: 6px;
+      color: #3a3a3c;
+      cursor: pointer;
+    }
+    .skin-switch button[aria-pressed="true"] {
+      background: #fff;
+      box-shadow: 0 0 0 0.5px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.08);
+      color: #1d1d1f;
+    }
+
+    .window {
+      width: min(1080px, 100%);
+      height: min(700px, calc(100vh - 110px));
+      min-height: 560px;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ——— Clean Mac ——— */
+    .mac { background: #1e1e1e; color: #f5f5f7; }
+    .mac .titlebar {
+      height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 12px 0 14px;
+      background: #2c2c2e;
+      border-bottom: 0.5px solid rgba(255,255,255,0.08);
+      -webkit-app-region: drag;
+    }
+    .lights { display: flex; gap: 7px; flex-shrink: 0; }
+    .lights i {
+      width: 12px; height: 12px; border-radius: 50%; display: block;
+    }
+    .lights .r { background: #ff5f57; }
+    .lights .y { background: #febc2e; }
+    .lights .g { background: #28c840; }
+    .mac .win-title {
+      font-size: 13px;
+      font-weight: 590;
+      color: rgba(255,255,255,0.85);
+      min-width: 88px;
+    }
+    .mac .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+    }
+    .mac .tb-btn {
+      height: 26px;
+      padding: 0 10px;
+      border-radius: 6px;
+      border: 0.5px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      color: #f5f5f7;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .mac .tb-btn:hover { background: rgba(255,255,255,0.1); }
+    .mac .tb-btn[aria-pressed="true"] {
+      background: #0a84ff;
+      border-color: #0a84ff;
+    }
+    .mac .status {
+      margin-left: auto;
+      font-size: 11px;
+      color: rgba(255,255,255,0.45);
+      font-variant-numeric: tabular-nums;
+    }
+    .mac .status strong {
+      color: #30d158;
+      font-weight: 590;
+    }
+    .mac .status.down strong { color: #ff453a; }
+
+    .mac .body {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      grid-template-rows: 1fr auto;
+      min-height: 0;
+    }
+    .mac .map-wrap {
+      grid-row: 1;
+      position: relative;
+      background: #161616;
+    }
+    .mac .feed {
+      grid-column: 1;
+      height: 128px;
+      border-top: 0.5px solid rgba(255,255,255,0.08);
+      background: #242426;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .mac .feed.hidden { display: none; }
+    .mac .feed-head {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 14px 4px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.4);
+      font-weight: 590;
+    }
+    .mac .feed-row {
+      display: grid;
+      grid-template-columns: 64px 72px 1fr 56px 52px;
+      gap: 8px;
+      padding: 3px 14px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.72);
+      font-variant-numeric: tabular-nums;
+    }
+    .mac .feed-row .mute { color: rgba(255,255,255,0.38); }
+    .mac .inspector {
+      grid-column: 2;
+      grid-row: 1 / -1;
+      background: #2c2c2e;
+      border-left: 0.5px solid rgba(255,255,255,0.08);
+      padding: 16px 16px 18px;
+      overflow: auto;
+    }
+    .mac .insp-kicker {
+      font-size: 11px;
+      font-weight: 590;
+      color: rgba(255,255,255,0.38);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+    }
+    .mac .insp-name {
+      font-size: 20px;
+      font-weight: 620;
+      letter-spacing: -0.03em;
+      margin: 0 0 2px;
+    }
+    .mac .insp-sub {
+      font-size: 12px;
+      color: rgba(255,255,255,0.45);
+      margin-bottom: 14px;
+    }
+    .mac .pill {
+      display: inline-flex;
+      align-items: center;
+      height: 18px;
+      padding: 0 7px;
+      border-radius: 9px;
+      font-size: 11px;
+      font-weight: 590;
+      background: rgba(48, 209, 88, 0.16);
+      color: #30d158;
+    }
+    .mac .pill.warn { background: rgba(255, 214, 10, 0.16); color: #ffd60a; }
+    .mac .pill.off { background: rgba(255, 69, 58, 0.16); color: #ff453a; }
+    .mac .row {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 8px;
+      padding: 6px 0;
+      font-size: 12px;
+      border-bottom: 0.5px solid rgba(255,255,255,0.06);
+    }
+    .mac .row .k { color: rgba(255,255,255,0.38); }
+    .mac .meter {
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255,255,255,0.08);
+      margin-top: 5px;
+    }
+    .mac .meter > i {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: #30d158;
+    }
+    .mac .meter.warn > i { background: #ffd60a; }
+    .mac .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 14px 0 4px;
+    }
+    .mac .actions button {
+      height: 26px;
+      padding: 0 10px;
+      border-radius: 6px;
+      border: 0.5px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .mac .actions button.danger {
+      color: #ff453a;
+      border-color: rgba(255, 69, 58, 0.35);
+    }
+    .mac .models { margin-top: 14px; }
+    .mac .models h3 {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 590;
+      color: rgba(255,255,255,0.38);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .mac .models li {
+      font-size: 12px;
+      padding: 3px 0;
+      color: rgba(255,255,255,0.78);
+      list-style: none;
+    }
+    .mac .models ul { margin: 0; padding: 0; }
+    .mac .notes {
+      margin-top: 14px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: rgba(255,255,255,0.38);
+    }
+
+    /* ——— Current lab look ——— */
+    .lab { background: #0a0e0a; color: #b8eb9e; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    .lab .titlebar {
+      padding: 14px 18px 10px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .lab .hex-mark {
+      width: 36px; height: 36px;
+      filter: drop-shadow(0 0 8px rgba(125, 255, 59, 0.4));
+    }
+    .lab .brand {
+      font-size: 22px;
+      font-weight: 800;
+      color: #7dff3b;
+      text-shadow: 0 0 14px rgba(125, 255, 59, 0.4);
+      letter-spacing: 0.02em;
+    }
+    .lab .brand small {
+      display: block;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      color: #4a8c2e;
+      margin-top: 2px;
+    }
+    .lab .toolbar { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+    .lab .chip {
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      padding: 4px 8px;
+      border: 1px solid #334d33;
+      border-radius: 2px;
+      background: transparent;
+      color: #597a59;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .lab .chip.on { color: #7dff3b; border-color: rgba(125,255,59,0.5); }
+    .lab .lab-stat {
+      text-align: right;
+      font-size: 11px;
+      color: #7dff3b;
+    }
+    .lab .lab-stat.down { color: #ff4566; }
+    .lab .lab-stat span { display: block; font-size: 9px; color: #4a6b4a; margin-top: 4px; }
+    .lab .body {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      grid-template-rows: 1fr auto;
+      gap: 14px;
+      padding: 0 16px 14px;
+      min-height: 0;
+      position: relative;
+    }
+    .lab .body::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0,0,0,0.12) 2px 3px);
+      pointer-events: none;
+      z-index: 2;
+    }
+    .lab .map-wrap {
+      grid-row: 1;
+      position: relative;
+      background: radial-gradient(circle at 45% 48%, rgba(125,255,59,0.05), transparent 42%), #0b100b;
+      border: 1px solid #203320;
+      border-radius: 4px;
+    }
+    .lab .feed {
+      height: 132px;
+      background: #0b110b;
+      border: 1px solid #203320;
+      border-radius: 4px;
+      z-index: 1;
+    }
+    .lab .feed.hidden { display: none; }
+    .lab .feed-head {
+      display: flex;
+      justify-content: space-between;
+      padding: 7px 12px;
+      font-size: 9px;
+      letter-spacing: 0.16em;
+      color: #4a8c2e;
+      border-bottom: 1px solid #203320;
+    }
+    .lab .feed-row {
+      display: flex;
+      gap: 10px;
+      padding: 3px 12px;
+      font-size: 9px;
+      color: #b8eb9e;
+    }
+    .lab .feed-row .mute { color: #4a6b4a; }
+    .lab .inspector {
+      grid-column: 2;
+      grid-row: 1 / -1;
+      background: #0b110b;
+      border: 1px solid #304d30;
+      border-radius: 4px;
+      padding: 16px;
+      z-index: 1;
+      overflow: auto;
+    }
+    .lab .insp-kicker {
+      font-size: 9px;
+      letter-spacing: 0.2em;
+      color: #4a8c2e;
+      margin-bottom: 10px;
+    }
+    .lab .insp-name {
+      font-size: 18px;
+      font-weight: 700;
+      color: #7dff3b;
+      margin: 0;
+    }
+    .lab .insp-sub { font-size: 9px; color: #4a8c2e; margin: 2px 0 12px; }
+    .lab .pill { display: none; }
+    .lab .row {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      gap: 8px;
+      font-size: 11px;
+      padding: 3px 0;
+    }
+    .lab .row .k { color: #597a59; font-size: 9px; }
+    .lab .meter { height: 3px; background: #1e2e1e; margin-top: 4px; border-radius: 99px; }
+    .lab .meter > i { display: block; height: 100%; background: #4a8c2e; border-radius: inherit; }
+    .lab .meter.warn > i { background: #c4a359; }
+    .lab .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    .lab .actions button {
+      font-family: inherit;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      padding: 5px 10px;
+      border-radius: 2px;
+      border: 1px solid rgba(125,255,59,0.5);
+      background: transparent;
+      color: #7dff3b;
+      cursor: pointer;
+    }
+    .lab .actions button.danger { color: #ff4566; border-color: rgba(255,69,102,0.5); }
+    .lab .models { margin-top: 10px; }
+    .lab .models h3 { font-size: 9px; color: #4a8c2e; letter-spacing: 0.12em; margin: 0 0 6px; font-weight: 500; }
+    .lab .models ul { margin: 0; padding: 0; }
+    .lab .models li { list-style: none; font-size: 11px; padding: 2px 0; color: #b8eb9e; }
+    .lab .models li::before { content: "· "; }
+    .lab .notes { margin-top: 12px; font-size: 9px; color: #597a59; line-height: 1.45; }
+
+    /* Map */
+    svg.map { width: 100%; height: 100%; display: block; }
+    .hex-empty { fill: none; stroke: #3a4a3a; stroke-width: 1; opacity: 0.45; }
+    .mac .hex-empty { stroke: #3a3a3c; opacity: 0.55; }
+    .hex-node { cursor: pointer; }
+    .hex-fill { fill: currentColor; fill-opacity: 0.18; }
+    .hex-stroke { fill: none; stroke: currentColor; stroke-width: 1.6; }
+    .hex-node.selected .hex-stroke { stroke-width: 2.4; }
+    .hex-node.lit .hex-fill { fill-opacity: 0.35; }
+    .hex-label {
+      font-size: 11px;
+      font-weight: 700;
+      fill: #7dff3b;
+      text-anchor: middle;
+      pointer-events: none;
+    }
+    .mac .hex-label {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      font-weight: 590;
+      fill: #f5f5f7;
+      font-size: 11px;
+    }
+    .hex-sub {
+      font-size: 9px;
+      fill: #6a8a6a;
+      text-anchor: middle;
+      pointer-events: none;
+    }
+    .mac .hex-sub {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      fill: rgba(255,255,255,0.4);
+    }
+    .hex-sub.off { fill: #ff4566; }
+    .hex-sub.warn { fill: #c4a359; }
+    .mac .hex-sub.off { fill: #ff453a; }
+    .mac .hex-sub.warn { fill: #ffd60a; }
+    .spoke { stroke: #4a8c2e; stroke-opacity: 0.35; stroke-width: 1.2; }
+    .mac .spoke { stroke: #30d158; stroke-opacity: 0.28; }
+    .hint {
+      position: absolute;
+      left: 12px; bottom: 12px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.35);
+      pointer-events: none;
+    }
+    .lab .hint { font-size: 9px; color: #4a6b4a; }
+  </style>
+</head>
+<body>
+  <div class="page-head">
+    <div>
+      <h1>Honeycomb chrome comparison</h1>
+      <p>Same fleet and hex map. Only window chrome, type, and controls change. Click a hex.</p>
+    </div>
+    <div class="skin-switch" role="group" aria-label="Look">
+      <button type="button" id="btn-lab" aria-pressed="false">Current</button>
+      <button type="button" id="btn-mac" aria-pressed="true">Clean Mac</button>
+    </div>
+  </div>
+
+  <div class="window mac" id="app">
+    <div class="titlebar" id="titlebar"></div>
+    <div class="body">
+      <div class="map-wrap">
+        <svg class="map" id="map" viewBox="0 0 640 420"></svg>
+        <div class="hint">Click a node · health is the outline</div>
+      </div>
+      <div class="feed" id="feed"></div>
+      <aside class="inspector" id="inspector"></aside>
+    </div>
+  </div>
+
+  <script>
+    const nodes = [
+      {
+        id: "hub", name: "My Mac", role: "Control plane", short: "HUB",
+        q: 0, r: 0, health: "online", lit: false,
+        host: "localhost · 127.0.0.1", path: "lmstudio-hub",
+        infer: "LM Studio · 127.0.0.1:1234", latency: "4 ms",
+        gpu: null, mem: null,
+        models: ["qwen2.5-7b-instruct"],
+        notes: "The Mac running Honeycomb. LM Studio is optional — the hex stays up as the control plane if :1234 is off.",
+        actions: ["SSH", "Open API", "Ping"]
+      },
+      {
+        id: "spark1", name: "Spark One", role: "DGX Spark", short: "SPARK",
+        q: 1, r: -1, health: "online", lit: true,
+        host: "spark-abcd · 192.168.1.50", path: "vllm-ssh",
+        infer: "vLLM · 192.168.1.50:8000", latency: "18 ms",
+        gpu: 72, mem: 0.61,
+        models: ["meta-llama/Llama-3.1-70B-Instruct"],
+        notes: "Online = SSH reachable. Models = whatever the running serve exposes.",
+        actions: ["SSH", "Open API", "Ping", "Doctor", "Stop"]
+      },
+      {
+        id: "pc", name: "Gaming PC", role: "LM Studio", short: "PC",
+        q: -1, r: 1, health: "degraded", lit: false,
+        host: "gaming-pc · 192.168.1.20", path: "http-only",
+        infer: "API not answering", latency: "210 ms",
+        gpu: 8, mem: 0.22,
+        models: [],
+        notes: "Remote LM Studio. Loaded models come from HTTP — no Mac LMS required.",
+        actions: ["Open API", "Serve"]
+      }
+    ];
+
+    const feed = [
+      { t: "3:54:02", alias: "cheap", model: "Llama-3.1-70B", tok: "128", dur: "1.4s" },
+      { t: "3:53:41", alias: "spark1", model: "Llama-3.1-70B", tok: "64", dur: "890ms" },
+      { t: "3:52:18", alias: "lms", model: "qwen2.5-7b", tok: "32", dur: "410ms" },
+    ];
+
+    const state = { skin: "mac", selected: "spark1", feed: true, privacy: false };
+    const app = document.getElementById("app");
+
+    function axial(q, r, size, ox, oy) {
+      const x = size * (Math.sqrt(3) * q + Math.sqrt(3) / 2 * r);
+      const y = size * (1.5 * r);
+      return [ox + x, oy + y];
+    }
+    function hexPts(cx, cy, size) {
+      return Array.from({ length: 6 }, (_, i) => {
+        const a = (i * 60 - 30) * Math.PI / 180;
+        return `${cx + size * Math.cos(a)},${cy + size * Math.sin(a)}`;
+      }).join(" ");
+    }
+    function healthColor(h) {
+      if (h === "online") return "#30d158";
+      if (h === "degraded") return "#ffd60a";
+      return "#ff453a";
+    }
+    function healthLab(h) {
+      if (h === "online") return "#7dff3b";
+      if (h === "degraded") return "#c4a359";
+      return "#ff4566";
+    }
+
+    function renderTitlebar() {
+      const el = document.getElementById("titlebar");
+      const gw = `<span class="status"><strong>2/3</strong> nodes · Gateway :4000</span>`;
+      if (state.skin === "mac") {
+        el.innerHTML = `
+          <div class="lights" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+          <div class="win-title">Honeycomb</div>
+          <div class="toolbar">
+            <button class="tb-btn" type="button">Rescan</button>
+            <button class="tb-btn" type="button" data-act="feed" aria-pressed="${state.feed}">Feed</button>
+            <button class="tb-btn" type="button" data-act="privacy" aria-pressed="${state.privacy}">Privacy</button>
+            ${gw}
+          </div>`;
+      } else {
+        el.innerHTML = `
+          <svg class="hex-mark" viewBox="0 0 36 36">${miniHexes()}</svg>
+          <div class="brand">MYLAB<small>SPARK ONE  ·  MY MAC  ·  GAMING PC</small></div>
+          <div class="toolbar">
+            <button class="chip ${state.feed ? "on" : ""}" data-act="feed">FEED</button>
+            <button class="chip ${state.privacy ? "on" : ""}" data-act="privacy">PRIVACY</button>
+            <div class="lab-stat">2/3 NODES · GW ● :4000<span>scan 3:54:12 AM</span></div>
+          </div>`;
+      }
+    }
+
+    function miniHexes() {
+      const cells = [[0,0],[1,0],[-1,0],[0,1],[0,-1]];
+      const s = 3.6, sp = 4;
+      return cells.map(([q,r]) => {
+        const x = 18 + sp * (Math.sqrt(3) * q + Math.sqrt(3)/2 * r);
+        const y = 18 + sp * 1.5 * r;
+        const c = q === 0 && r === 0;
+        return `<polygon points="${hexPts(x,y,s)}" fill="${c ? "rgba(125,255,59,0.25)" : "none"}" stroke="#7dff3b" stroke-opacity="${c?1:0.55}" stroke-width="${c?1.4:0.9}"/>`;
+      }).join("");
+    }
+
+    function renderMap() {
+      const svg = document.getElementById("map");
+      const ox = 320, oy = 210, size = 48;
+      const empty = [];
+      for (let q = -3; q <= 3; q++) {
+        for (let r = -3; r <= 3; r++) {
+          if (Math.abs(-q - r) > 3) continue;
+          if (nodes.some(n => n.q === q && n.r === r)) continue;
+          const [x,y] = axial(q, r, size, ox, oy);
+          empty.push(`<polygon class="hex-empty" points="${hexPts(x,y,size*0.72)}"/>`);
+        }
+      }
+      const hub = nodes.find(n => n.id === "hub");
+      const [hx, hy] = axial(hub.q, hub.r, size, ox, oy);
+      const spokes = nodes.filter(n => n.id !== "hub").map(n => {
+        const [x,y] = axial(n.q, n.r, size, ox, oy);
+        return `<line class="spoke" x1="${hx}" y1="${hy}" x2="${x}" y2="${y}"/>`;
+      });
+      const hexes = nodes.map(n => {
+        const [x,y] = axial(n.q, n.r, size, ox, oy);
+        const color = state.skin === "mac" ? healthColor(n.health) : healthLab(n.health);
+        const sub = n.lit ? "LIT" : n.health === "degraded" ? "DEGRADED" : (n.models[0] ? shortModel(n.models[0]) : n.short);
+        const subCls = n.health === "offline" ? "off" : n.health === "degraded" ? "warn" : "";
+        return `<g class="hex-node ${state.selected===n.id?"selected":""} ${n.lit?"lit":""}" data-id="${n.id}" style="color:${n.lit && state.skin==="lab" ? "#7dff3b" : color}">
+          <polygon class="hex-fill" points="${hexPts(x,y,size*0.92)}"/>
+          <polygon class="hex-stroke" points="${hexPts(x,y,size*0.92)}"/>
+          <text class="hex-label" x="${x}" y="${y-4}">${n.name}</text>
+          <text class="hex-sub ${subCls}" x="${x}" y="${y+12}">${sub}</text>
+        </g>`;
+      });
+      svg.innerHTML = spokes.join("") + empty.join("") + hexes.join("");
+      svg.querySelectorAll(".hex-node").forEach(g => {
+        g.addEventListener("click", () => { state.selected = g.dataset.id; render(); });
+      });
+    }
+
+    function shortModel(id) {
+      const base = id.split("/").pop();
+      return base.length > 14 ? base.slice(0, 12) + "…" : base;
+    }
+    function redact(s) {
+      return state.privacy ? s.replace(/\d+\.\d+\.\d+\.\d+/g, "•••").replace(/spark-abcd|gaming-pc|localhost/g, "•••") : s;
+    }
+
+    function renderInspector() {
+      const n = nodes.find(x => x.id === state.selected);
+      const el = document.getElementById("inspector");
+      const pillClass = n.health === "online" ? "" : n.health === "degraded" ? "warn" : "off";
+      const gpuBar = n.gpu != null ? `<div class="meter ${n.gpu>85?"warn":""}"><i style="width:${n.gpu}%"></i></div>` : "";
+      const memBar = n.mem != null ? `<div class="meter ${n.mem>0.85?"warn":""}"><i style="width:${n.mem*100}%"></i></div>` : "";
+      el.innerHTML = `
+        <div class="insp-kicker">${state.skin === "mac" ? "Inspector" : "NODE // INSPECT"}</div>
+        <h2 class="insp-name">${n.name}</h2>
+        <div class="insp-sub">${n.role} · <span class="pill ${pillClass}">${n.health}</span>${state.skin==="lab" ? n.health.toUpperCase() : ""}</div>
+        <div class="actions">${n.actions.map(a => `<button type="button" class="${a==="Stop"?"danger":""}">${state.skin==="lab"?a.toUpperCase():a}</button>`).join("")}</div>
+        <div class="row"><span class="k">${state.skin==="mac"?"Host":"HOST"}</span><span>${redact(n.host)}</span></div>
+        <div class="row"><span class="k">${state.skin==="mac"?"Path":"PATH"}</span><span>${n.path}</span></div>
+        <div class="row"><span class="k">${state.skin==="mac"?"Infer":"INFER"}</span><span>${redact(n.infer)}</span></div>
+        <div class="row"><span class="k">${state.skin==="mac"?"Latency":"LATENCY"}</span><span>${n.latency}</span></div>
+        ${n.gpu != null ? `<div class="row"><span class="k">GPU</span><span>${n.gpu}%${gpuBar}</span></div>` : ""}
+        ${n.mem != null ? `<div class="row"><span class="k">${state.skin==="mac"?"Memory":"MEM"}</span><span>${Math.round(n.mem*24)} / 24 GB${memBar}</span></div>` : ""}
+        <div class="models">
+          <h3>${state.skin==="mac" ? "Serving models" : "SERVING MODELS"}</h3>
+          <ul>${(n.models.length?n.models:["Nothing serving"]).map(m => `<li>${m}</li>`).join("")}</ul>
+        </div>
+        <p class="notes">${n.notes}</p>`;
+    }
+
+    function renderFeed() {
+      const el = document.getElementById("feed");
+      el.classList.toggle("hidden", !state.feed);
+      const rows = feed.map(e => `<div class="feed-row"><span class="mute">${e.t}</span><span>${e.alias}</span><span>${e.model}</span><span class="mute">${e.tok} tok</span><span class="mute">${e.dur}</span></div>`).join("");
+      el.innerHTML = `
+        <div class="feed-head"><span>${state.skin==="mac"?"Traffic":"TRAFFIC"}</span><span>${feed.length} recent</span></div>
+        ${rows}`;
+    }
+
+    function render() {
+      app.className = "window " + state.skin;
+      renderTitlebar();
+      renderMap();
+      renderInspector();
+      renderFeed();
+    }
+
+    document.getElementById("btn-mac").onclick = () => { state.skin = "mac"; syncSwitch(); render(); };
+    document.getElementById("btn-lab").onclick = () => { state.skin = "lab"; syncSwitch(); render(); };
+    function syncSwitch() {
+      document.getElementById("btn-mac").setAttribute("aria-pressed", state.skin === "mac");
+      document.getElementById("btn-lab").setAttribute("aria-pressed", state.skin === "lab");
+    }
+    document.getElementById("titlebar").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-act]");
+      if (!b) return;
+      state[b.dataset.act] = !state[b.dataset.act];
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
