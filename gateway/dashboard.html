@@ -488,7 +488,15 @@
     return nodes.length ? nodes[0].id : null;
   }
 
+  function nodesWithCoordinates(nodes) {
+    return nodes.filter(function (n) {
+      return n && Array.isArray(n.axial) && n.axial.length >= 2 &&
+             Number.isFinite(n.axial[0]) && Number.isFinite(n.axial[1]);
+    });
+  }
+
   function computeViewBox(nodes) {
+    nodes = nodesWithCoordinates(nodes);
     if (!nodes.length) return { minX: -300, minY: -300, w: 600, h: 600 };
     var xs = [], ys = [];
     nodes.forEach(function (n) {
@@ -686,7 +694,8 @@
   }
 
   function renderMap(data) {
-    var nodes = data.nodes || [];
+    var configuredNodes = data.nodes || [];
+    var nodes = nodesWithCoordinates(configuredNodes);
     hubId = findHub(nodes);
     var vb = computeViewBox(nodes);
     svg.setAttribute("viewBox", vb.minX + " " + vb.minY + " " + vb.w + " " + vb.h);
@@ -700,7 +709,7 @@
     renderLattice(nodes, vb);
     renderEdges(nodes, data.links || []);
     renderNodes(nodes);
-    renderEmptyState(nodes);
+    renderEmptyState(configuredNodes);
   }
 
   // First-run guidance: an empty map should say why it's empty.
