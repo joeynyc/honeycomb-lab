@@ -52,6 +52,60 @@ def _lms_output(args, timeout=8.0):
     return ""
 
 
+class DashboardPlacement(unittest.TestCase):
+    def snapshot(self, fleet_nodes):
+        with patch.object(
+            nodes, "_fleet", {"title": "TEST", "nodes": fleet_nodes, "links": []}
+        ), patch.object(nodes, "_status", {}):
+            return nodes.snapshot({})
+
+    def test_auto_placements_remain_unique_after_sixth_node(self):
+        fleet_nodes = [
+            {"id": f"node-{index}", "name": f"Node {index}"}
+            for index in range(7)
+        ]
+
+        result = self.snapshot(fleet_nodes)
+        positions = [tuple(node["axial"]) for node in result["nodes"]]
+
+        self.assertEqual(len(positions), len(set(positions)))
+
+    def test_auto_placements_remain_unique_across_rings_and_exclude_hub(self):
+        fleet_nodes = [{"id": "hub", "name": "Hub", "axial": [0, 0]}]
+        fleet_nodes.extend(
+            {"id": f"node-{index}", "name": f"Node {index}"}
+            for index in range(50)
+        )
+
+        result = self.snapshot(fleet_nodes)
+        positions = {node["id"]: tuple(node["axial"]) for node in result["nodes"]}
+        automatic = [
+            position for node_id, position in positions.items() if node_id != "hub"
+        ]
+        radii = [max(abs(q), abs(r), abs(q + r)) for q, r in automatic]
+
+        self.assertEqual(positions["hub"], (0, 0))
+        self.assertNotIn((0, 0), automatic)
+        self.assertEqual(len(automatic), len(set(automatic)))
+        self.assertGreater(len(set(radii)), 1)
+        self.assertLessEqual(max(radii), 11)
+
+    def test_auto_placement_preserves_explicit_coordinates(self):
+        result = self.snapshot(
+            [
+                {"id": "automatic", "name": "Automatic"},
+                {"id": "explicit", "name": "Explicit", "axial": [-1, 1]},
+            ]
+        )
+        positions = {node["id"]: node["axial"] for node in result["nodes"]}
+
+        self.assertEqual(positions["explicit"], [-1, 1])
+        self.assertNotEqual(positions["automatic"], positions["explicit"])
+
+    def test_empty_fleet_has_no_placements(self):
+        self.assertEqual(self.snapshot([])["nodes"], [])
+
+
 class HubProbe(unittest.TestCase):
     def test_models_come_from_lms_ps_not_http_catalog(self):
         node = {

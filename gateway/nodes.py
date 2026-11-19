@@ -497,7 +497,7 @@ def snapshot(activity: dict[str, Any]) -> dict[str, Any]:
         out = []
         for radius in range(1, 12):
             q, r = -radius, radius
-            for dq, dr in [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)]:
+            for dq, dr in [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]:
                 for _ in range(radius):
                     if (q, r) not in taken and (q, r) != (0, 0):
                         out.append((q, r))
