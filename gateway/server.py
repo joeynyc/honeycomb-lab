@@ -944,7 +944,7 @@ class Handler(BaseHTTPRequestHandler):
                 headers_sent = True
                 while True:
                     try:
-                        chunk = resp.read(4096)
+                        chunk = resp.read1(4096)
                     except Exception as e:
                         # The upstream failed after its 200 headers. The client
                         # response cannot be changed now, but accounting must
