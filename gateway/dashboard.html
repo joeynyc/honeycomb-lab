@@ -696,7 +696,7 @@
   function renderMap(data) {
     var configuredNodes = data.nodes || [];
     var nodes = nodesWithCoordinates(configuredNodes);
-    hubId = findHub(nodes);
+    hubId = findHub(configuredNodes);
     var vb = computeViewBox(nodes);
     svg.setAttribute("viewBox", vb.minX + " " + vb.minY + " " + vb.w + " " + vb.h);
 
