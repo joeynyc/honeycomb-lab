@@ -506,18 +506,33 @@
     return { minX: minX, minY: minY, w: w, h: h };
   }
 
+  function latticeCells(nodes, vb) {
+    var cells = hexDisk(3);
+    function withinView(c) {
+      var p = axialToPixel(c[0], c[1], HEX_S);
+      return p.x >= vb.minX - HEX_S && p.x <= vb.minX + vb.w + HEX_S &&
+        p.y >= vb.minY - HEX_S && p.y <= vb.minY + vb.h + HEX_S;
+    }
+    var visible = cells.filter(withinView);
+    if (!nodes.length) return visible;
+
+    var q = 0, r = 0;
+    nodes.forEach(function (n) { q += n.axial[0]; r += n.axial[1]; });
+    q = Math.round(q / nodes.length);
+    r = Math.round(r / nodes.length);
+    if (visible.length && Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) <= 3) return visible;
+    return cells.map(function (c) { return [c[0] + q, c[1] + r]; }).filter(withinView);
+  }
+
   function renderLattice(nodes, vb) {
     latticeLayer.innerHTML = "";
     var occupied = {};
     nodes.forEach(function (n) { occupied[n.axial[0] + "," + n.axial[1]] = true; });
-    var cells = hexDisk(3);
+    var cells = latticeCells(nodes, vb);
     cells.forEach(function (c) {
       var key = c[0] + "," + c[1];
       if (occupied[key]) return;
       var p = axialToPixel(c[0], c[1], HEX_S);
-      // only draw if within/near viewbox bounds (a bit of margin)
-      if (p.x < vb.minX - HEX_S || p.x > vb.minX + vb.w + HEX_S) return;
-      if (p.y < vb.minY - HEX_S || p.y > vb.minY + vb.h + HEX_S) return;
       var poly = svgEl("polygon", {
         points: hexPoints(p.x, p.y, HEX_S * 0.94),
         fill: "none",
