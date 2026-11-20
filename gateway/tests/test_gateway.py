@@ -83,6 +83,35 @@ class FakeBackend(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return
+        if payload.get("stream") and self.server.mode in (
+            "gated_stream_content_length",
+            "gated_stream_chunked",
+        ):
+            first = b"data: first\n\n"
+            remainder = b"data: second\n\ndata: [DONE]\n\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            if self.server.mode == "gated_stream_content_length":
+                self.send_header("Content-Length", str(len(first) + len(remainder)))
+            else:
+                self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+
+            if self.server.mode == "gated_stream_chunked":
+                self.wfile.write(f"{len(first):X}\r\n".encode() + first + b"\r\n")
+            else:
+                self.wfile.write(first)
+            self.wfile.flush()
+            self.server.stream_first_sent.set()
+            self.server.stream_release.wait(timeout=5)
+            if self.server.mode == "gated_stream_chunked":
+                self.wfile.write(
+                    f"{len(remainder):X}\r\n".encode() + remainder + b"\r\n0\r\n\r\n"
+                )
+            else:
+                self.wfile.write(remainder)
+            self.wfile.flush()
+            return
         if payload.get("stream"):
             body = (
                 b'data: {"choices":[{"delta":{"content":"po"}}]}\n\n'
@@ -123,6 +152,8 @@ def _start_backend(tag, models):
     srv.healthy = True
     srv.mode = "ok"
     srv.received = []
+    srv.stream_first_sent = threading.Event()
+    srv.stream_release = threading.Event()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
@@ -239,6 +270,8 @@ class GatewayTestCase(unittest.TestCase):
             be.healthy = True
             be.mode = "ok"
             be.received.clear()
+            be.stream_first_sent.clear()
+            be.stream_release.clear()
         _clear_probe_cache()
         # Isolate request history / cumulative stats between tests.
         with server._requests_lock:
@@ -411,6 +444,64 @@ class CheapAndFailover(GatewayTestCase):
 
 
 class Streaming(GatewayTestCase):
+    def _assert_gated_first_event(self, mode):
+        ALPHA.mode = mode
+        body = json.dumps(
+            {"model": "al", "stream": True, "messages": []}
+        ).encode()
+        conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)
+        first_event_arrived = threading.Event()
+        result = {}
+        try:
+            conn.request(
+                "POST",
+                "/v1/chat/completions",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                },
+            )
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+
+            def read_first_event():
+                event = bytearray()
+                while not event.endswith(b"\n\n"):
+                    line = response.fp.readline()
+                    if not line:
+                        break
+                    event.extend(line)
+                result["event"] = bytes(event)
+                result["before_release"] = not ALPHA.stream_release.is_set()
+                first_event_arrived.set()
+
+            reader = threading.Thread(target=read_first_event)
+            reader.start()
+            self.assertTrue(ALPHA.stream_first_sent.wait(timeout=2))
+            arrived_before_release = first_event_arrived.wait(timeout=2)
+            if not arrived_before_release:
+                # Let a baseline implementation blocked in read(4096) unwind.
+                ALPHA.stream_release.set()
+            reader.join(timeout=2)
+            self.assertTrue(arrived_before_release)
+            self.assertTrue(result["before_release"])
+            self.assertEqual(result["event"], b"data: first\n\n")
+
+            ALPHA.stream_release.set()
+            self.assertEqual(
+                response.read(), b"data: second\n\ndata: [DONE]\n\n"
+            )
+        finally:
+            ALPHA.stream_release.set()
+            conn.close()
+
+    def test_small_content_length_event_is_forwarded_before_remainder(self):
+        self._assert_gated_first_event("gated_stream_content_length")
+
+    def test_small_chunked_event_is_forwarded_before_remainder(self):
+        self._assert_gated_first_event("gated_stream_chunked")
+
     def test_sse_chunks_pass_through(self):
         status, headers, raw = _request(
             "POST", "/v1/chat/completions",
